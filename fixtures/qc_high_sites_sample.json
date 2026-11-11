@@ -1,0 +1,92 @@
+[
+  {
+    "site_id": "QC-ESTR-SUTT-01",
+    "name": "Mont Sutton Sommet",
+    "county": "Estrie",
+    "location": {
+      "lat": 45.1053,
+      "lon": -72.5628,
+      "elevation_m": 968.0
+    },
+    "site_type": "mountain_summit",
+    "mast_height_m": 18.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://montsutton.com",
+    "notes": "Premier Eastern Townships ski peak with optical line-of-sight to Northern Vermont (Jay Peak 38km)"
+  },
+  {
+    "site_id": "QC-ESTR-MEGA-01",
+    "name": "Observatoire du Mont Mégantic",
+    "county": "Estrie",
+    "location": {
+      "lat": 45.4558,
+      "lon": -71.1528,
+      "elevation_m": 1105.0
+    },
+    "site_type": "research_tower",
+    "mast_height_m": 20.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "source_url": "https://www.astrolab.qc.ca",
+    "notes": "Major astronomical research observatory peak overlooking southern Quebec and Northern New Hampshire (Mount Washington 115km)"
+  },
+  {
+    "site_id": "QC-ESTR-ORFO-01",
+    "name": "Mont Orford Sommet Télécom",
+    "county": "Estrie",
+    "location": {
+      "lat": 45.3142,
+      "lon": -72.2356,
+      "elevation_m": 853.0
+    },
+    "site_type": "communications_tower",
+    "mast_height_m": 22.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://montorford.com",
+    "notes": "Regional communications tower summit overlooking Magog, Sherbrooke, and Lake Memphremagog corridor"
+  },
+  {
+    "site_id": "QC-MONT-HILA-01",
+    "name": "Mont Saint-Hilaire McGill Reserve",
+    "county": "Monteregie",
+    "location": {
+      "lat": 45.5539,
+      "lon": -73.1492,
+      "elevation_m": 414.0
+    },
+    "site_type": "research_tower",
+    "mast_height_m": 15.0,
+    "access_difficulty": "hike_in",
+    "has_grid_power": false,
+    "solar_exposure_pct": 85.0,
+    "is_public_land": true,
+    "source_url": "https://gault.mcgill.ca",
+    "notes": "Isolated Monteregian hill UNESCO biosphere reserve sentinel facing Lake Champlain basin and Montreal"
+  },
+  {
+    "site_id": "QC-MTL-ROYA-01",
+    "name": "Mont Royal Tour de Transmission",
+    "county": "Montreal",
+    "location": {
+      "lat": 45.5047,
+      "lon": -73.5878,
+      "elevation_m": 233.0
+    },
+    "site_type": "communications_tower",
+    "mast_height_m": 100.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 85.0,
+    "is_public_land": true,
+    "source_url": "https://ville.montreal.qc.ca",
+    "notes": "Iconic Montreal urban backbone transmission tower"
+  }
+]

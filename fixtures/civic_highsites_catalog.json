@@ -1,0 +1,274 @@
+[
+  {
+    "site_id": "CIVIC-VT-BURKE-FL-01",
+    "name": "Burke Mountain Fire Tower",
+    "location": {
+      "lat": 44.5714,
+      "lon": -71.8906,
+      "elevation_m": 995.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 15.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "notes": "Historic CCC steel fire tower on Burke Mountain summit in Darling State Park, Northeast Kingdom.",
+    "source_url": "https://vtstateparks.com/darling.html"
+  },
+  {
+    "site_id": "CIVIC-VT-ASCUT-FL-01",
+    "name": "Mount Ascutney Fire Tower",
+    "location": {
+      "lat": 43.4386,
+      "lon": -72.4533,
+      "elevation_m": 957.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 15.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "notes": "Steel fire lookout tower on Mount Ascutney summit in Mount Ascutney State Park, Windsor County.",
+    "source_url": "https://vtstateparks.com/ascutney.html"
+  },
+  {
+    "site_id": "CIVIC-NY-BLUE-FL-01",
+    "name": "Blue Mountain Fire Tower",
+    "location": {
+      "lat": 43.8697,
+      "lon": -74.4286,
+      "elevation_m": 1146.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 15.0,
+    "access_difficulty": "hike_in",
+    "has_grid_power": false,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "notes": "Adirondack steel fire lookout tower on Blue Mountain summit, central Adirondacks.",
+    "source_url": "https://www.dec.ny.gov/lands/5264.html"
+  },
+  {
+    "site_id": "CIVIC-NY-REGIS-FL-01",
+    "name": "Saint Regis Mountain Fire Tower",
+    "location": {
+      "lat": 44.3758,
+      "lon": -74.3183,
+      "elevation_m": 876.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 12.0,
+    "access_difficulty": "hike_in",
+    "has_grid_power": false,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "notes": "Historic restored Aeromotor fire tower on Saint Regis Mountain summit in Franklin County.",
+    "source_url": "https://www.dec.ny.gov/lands/5264.html"
+  },
+  {
+    "site_id": "CIVIC-NH-MILAN-FL-01",
+    "name": "Milan Hill Fire Tower",
+    "location": {
+      "lat": 44.5731,
+      "lon": -71.2189,
+      "elevation_m": 527.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 18.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "notes": "Historic wooden-cab fire tower in Milan Hill State Park, Coos County.",
+    "source_url": "https://www.nhstateparks.org/find-parks-trails/milan-hill-state-park"
+  },
+  {
+    "site_id": "CIVIC-VT-BURL-WT-01",
+    "name": "Burlington Water Tank",
+    "location": {
+      "lat": 44.4759,
+      "lon": -73.2121,
+      "elevation_m": 105.0
+    },
+    "site_type": "water_tower",
+    "mast_height_m": 25.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 100.0,
+    "is_public_land": true,
+    "notes": "City of Burlington municipal water storage tank overlooking lakefront and downtown.",
+    "source_url": "https://www.burlingtonvt.gov/DPW/Water"
+  },
+  {
+    "site_id": "CIVIC-VT-ESSEX-WT-01",
+    "name": "Essex Junction Water Standpipe",
+    "location": {
+      "lat": 44.4900,
+      "lon": -73.1100,
+      "elevation_m": 110.0
+    },
+    "site_type": "water_tower",
+    "mast_height_m": 30.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "notes": "City of Essex Junction municipal water standpipe serving suburban Chittenden County.",
+    "source_url": "https://www.essexjunction.org/departments/public-works"
+  },
+  {
+    "site_id": "CIVIC-NY-PLATT-WT-01",
+    "name": "Plattsburgh Municipal Water Standpipe",
+    "location": {
+      "lat": 44.6995,
+      "lon": -73.4529,
+      "elevation_m": 45.0
+    },
+    "site_type": "water_tower",
+    "mast_height_m": 28.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "notes": "City of Plattsburgh municipal water standpipe providing elevated line-of-sight across Cumberland Bay.",
+    "source_url": "https://www.cityofplattsburgh-ny.gov/public-works"
+  },
+  {
+    "site_id": "CIVIC-QC-STJEAN-WT-01",
+    "name": "Saint-Jean-sur-Richelieu Chateau d'eau",
+    "location": {
+      "lat": 45.3056,
+      "lon": -73.2533,
+      "elevation_m": 35.0
+    },
+    "site_type": "water_tower",
+    "mast_height_m": 35.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "notes": "Reservoir surélevé municipal de Saint-Jean-sur-Richelieu dans la Montérégie.",
+    "source_url": "https://sjsr.ca/eau-potable/"
+  },
+  {
+    "site_id": "CIVIC-NH-LITTLE-WT-01",
+    "name": "Littleton Municipal Water Tank",
+    "location": {
+      "lat": 44.3067,
+      "lon": -71.7708,
+      "elevation_m": 250.0
+    },
+    "site_type": "water_tower",
+    "mast_height_m": 25.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "notes": "Town of Littleton municipal water tank on hillside overlooking Ammonoosuc River valley.",
+    "source_url": "https://www.townoflittleton.org"
+  },
+  {
+    "site_id": "CIVIC-VT-PMRC-RES-01",
+    "name": "Mount Mansfield Proctor Maple Research Center Canopy Tower (UVM PMRC)",
+    "location": {
+      "lat": 44.5267,
+      "lon": -72.8683,
+      "elevation_m": 420.0
+    },
+    "site_type": "research_tower",
+    "mast_height_m": 25.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "notes": "University of Vermont Proctor Maple Research Center atmospheric research canopy tower.",
+    "source_url": "https://www.uvm.edu/cals/proctor-maple-research-center"
+  },
+  {
+    "site_id": "CIVIC-NH-HUBB-RES-01",
+    "name": "Hubbard Brook Experimental Forest Canopy Flux Tower",
+    "location": {
+      "lat": 43.9397,
+      "lon": -71.7508,
+      "elevation_m": 550.0
+    },
+    "site_type": "research_tower",
+    "mast_height_m": 32.0,
+    "access_difficulty": "hike_in",
+    "has_grid_power": false,
+    "solar_exposure_pct": 85.0,
+    "is_public_land": true,
+    "notes": "USDA Forest Service Hubbard Brook Experimental Forest meteorological and canopy flux tower.",
+    "source_url": "https://hubbardbrook.org"
+  },
+  {
+    "site_id": "CIVIC-MA-HARV-RES-01",
+    "name": "Harvard Forest EMS Canopy Flux Tower",
+    "location": {
+      "lat": 42.5378,
+      "lon": -72.1715,
+      "elevation_m": 340.0
+    },
+    "site_type": "research_tower",
+    "mast_height_m": 30.0,
+    "access_difficulty": "moderate",
+    "has_grid_power": true,
+    "solar_exposure_pct": 85.0,
+    "is_public_land": true,
+    "notes": "Harvard University LTER Environmental Measurement Site canopy flux tower.",
+    "source_url": "https://harvardforest.fas.harvard.edu"
+  },
+  {
+    "site_id": "CIVIC-QC-MEG-RES-01",
+    "name": "Mont Mégantic Astrolab Observatory Mast",
+    "location": {
+      "lat": 45.4558,
+      "lon": -71.1528,
+      "elevation_m": 1105.0
+    },
+    "site_type": "research_tower",
+    "mast_height_m": 20.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "notes": "Observatoire astronomique du Mont-Mégantic et mât de recherche scientifique.",
+    "source_url": "https://www.astrolab.qc.ca"
+  },
+  {
+    "site_id": "CIVIC-VT-CHAMP-SILO-01",
+    "name": "Champlain Valley Dairy Silo Complex",
+    "location": {
+      "lat": 44.2050,
+      "lon": -73.2380,
+      "elevation_m": 75.0
+    },
+    "site_type": "silo",
+    "mast_height_m": 22.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": false,
+    "notes": "Concrete stave agricultural silo complex overlooking Champlain Valley farmland in Ferrisburgh.",
+    "source_url": "https://agriculture.vermont.gov"
+  },
+  {
+    "site_id": "CIVIC-VT-SWANT-SILO-01",
+    "name": "Franklin County Grain Elevator Silo",
+    "location": {
+      "lat": 44.9167,
+      "lon": -73.1250,
+      "elevation_m": 50.0
+    },
+    "site_type": "silo",
+    "mast_height_m": 28.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": false,
+    "notes": "Commercial bulk grain elevator and concrete silo in Swanton rail corridor.",
+    "source_url": "https://agriculture.vermont.gov"
+  }
+]

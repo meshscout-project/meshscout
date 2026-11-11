@@ -1,0 +1,86 @@
+{
+  "bounds": {
+    "name": "Vermont_Chittenden_County",
+    "min_lat": 44.25,
+    "max_lat": 44.60,
+    "min_lon": -73.35,
+    "max_lon": -72.80
+  },
+  "sites": [
+    {
+      "site_id": "VT-PEAK-01",
+      "name": "Mount Mansfield Summit Ridge",
+      "location": {
+        "lat": 44.5437,
+        "lon": -72.8143,
+        "elevation_m": 1339.0
+      },
+      "site_type": "mountain_peak",
+      "mast_height_m": 10.0,
+      "has_grid_power": true,
+      "solar_exposure_pct": 100.0,
+      "access_difficulty": "moderate",
+      "notes": "Primary regional high site with broad Line-Of-Sight across Lake Champlain and Winooski Valley."
+    },
+    {
+      "site_id": "VT-TWR-02",
+      "name": "Essex Junction Municipal Mast",
+      "location": {
+        "lat": 44.4900,
+        "lon": -73.1100,
+        "elevation_m": 105.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 15.0,
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "access_difficulty": "drive_up",
+      "notes": "Town center repeater connecting suburban nodes to mountain backhaul."
+    },
+    {
+      "site_id": "VT-TWR-03",
+      "name": "Burlington Waterfront Lookout",
+      "location": {
+        "lat": 44.4759,
+        "lon": -73.2121,
+        "elevation_m": 65.0
+      },
+      "site_type": "building_rooftop",
+      "mast_height_m": 8.0,
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "access_difficulty": "drive_up",
+      "notes": "Coastal Lake Champlain hub."
+    },
+    {
+      "site_id": "VT-VAL-04",
+      "name": "Richmond Winooski River Valley Node",
+      "location": {
+        "lat": 44.4037,
+        "lon": -73.0039,
+        "elevation_m": 98.0
+      },
+      "site_type": "silo",
+      "mast_height_m": 6.0,
+      "has_grid_power": false,
+      "solar_exposure_pct": 75.0,
+      "access_difficulty": "moderate",
+      "notes": "Shadowed mountain river corridor node prone to RF blockage."
+    },
+    {
+      "site_id": "VT-PEAK-05",
+      "name": "Bolton Mountain Ridge Relay",
+      "location": {
+        "lat": 44.4890,
+        "lon": -72.8680,
+        "elevation_m": 1120.0
+      },
+      "site_type": "mountain_peak",
+      "mast_height_m": 6.0,
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "access_difficulty": "hike_in",
+      "notes": "Strategic relay point bridging Mansfield and southern I-89 mountain gaps."
+    }
+  ]
+}

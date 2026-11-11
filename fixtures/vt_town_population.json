@@ -1,0 +1,357 @@
+{
+  "Burlington": {
+    "population_2020": 44743,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Essex Junction": {
+    "population_2020": 10590,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "South Burlington": {
+    "population_2020": 20292,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Colchester": {
+    "population_2020": 17524,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Williston": {
+    "population_2020": 10103,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Richmond": {
+    "population_2020": 4167,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Jericho": {
+    "population_2020": 5104,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Milton": {
+    "population_2020": 10723,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Shelburne": {
+    "population_2020": 7717,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Charlotte": {
+    "population_2020": 3983,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Hinesburg": {
+    "population_2020": 4698,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Underhill": {
+    "population_2020": 3129,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Montpelier": {
+    "population_2020": 8074,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Barre": {
+    "population_2020": 8497,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Waterbury": {
+    "population_2020": 5331,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Waitsfield": {
+    "population_2020": 1844,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Plainfield": {
+    "population_2020": 1236,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Stowe": {
+    "population_2020": 5223,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Morrisville": {
+    "population_2020": 2086,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Jeffersonville": {
+    "population_2020": 750,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Johnson": {
+    "population_2020": 3498,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Hyde Park": {
+    "population_2020": 3020,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "St. Albans": {
+    "population_2020": 6877,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Swanton": {
+    "population_2020": 6701,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Enosburg Falls": {
+    "population_2020": 1356,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Richford": {
+    "population_2020": 2346,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Fairfax": {
+    "population_2020": 5014,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Highgate": {
+    "population_2020": 3472,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "South Hero": {
+    "population_2020": 1674,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Grand Isle": {
+    "population_2020": 2086,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "North Hero": {
+    "population_2020": 939,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Isle La Motte": {
+    "population_2020": 488,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Alburgh": {
+    "population_2020": 2106,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Rutland": {
+    "population_2020": 15807,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Castleton": {
+    "population_2020": 4458,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Brandon": {
+    "population_2020": 4129,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Fair Haven": {
+    "population_2020": 2736,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Poultney": {
+    "population_2020": 3020,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Middlebury": {
+    "population_2020": 9152,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Vergennes": {
+    "population_2020": 2553,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Bristol": {
+    "population_2020": 3782,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Ferrisburgh": {
+    "population_2020": 2646,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "White River Junction": {
+    "population_2020": 2544,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Woodstock": {
+    "population_2020": 3005,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Ludlow": {
+    "population_2020": 2172,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Springfield": {
+    "population_2020": 9062,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Windsor": {
+    "population_2020": 3559,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Bethel": {
+    "population_2020": 1942,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Brattleboro": {
+    "population_2020": 12184,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Bellows Falls": {
+    "population_2020": 2747,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Wilmington": {
+    "population_2020": 2255,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Putney": {
+    "population_2020": 2617,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Bennington": {
+    "population_2020": 15333,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Manchester": {
+    "population_2020": 4484,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Arlington": {
+    "population_2020": 2457,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Pownal": {
+    "population_2020": 3258,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "St. Johnsbury": {
+    "population_2020": 7364,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Lyndonville": {
+    "population_2020": 1180,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Hardwick": {
+    "population_2020": 2920,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Danville": {
+    "population_2020": 2680,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Newport": {
+    "population_2020": 4455,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Barton": {
+    "population_2020": 2872,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Derby Line": {
+    "population_2020": 687,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Randolph": {
+    "population_2020": 4774,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Bradford": {
+    "population_2020": 2790,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Wells River": {
+    "population_2020": 399,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Chelsea": {
+    "population_2020": 1233,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Island Pond": {
+    "population_2020": 751,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Canaan": {
+    "population_2020": 896,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Guildhall": {
+    "population_2020": 262,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  },
+  "Lunenburg": {
+    "population_2020": 1244,
+    "source_url": "https://data.census.gov",
+    "retrieved_on": "2024-01-01"
+  }
+}

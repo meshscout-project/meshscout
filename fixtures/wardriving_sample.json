@@ -1,0 +1,272 @@
+[
+  {
+    "packet_id": "pkt_001",
+    "timestamp": "2026-10-26T14:00:00Z",
+    "rx_coordinate": {
+      "lat": 44.4906,
+      "lon": -73.1112,
+      "elevation_m": 108.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -99.0,
+    "snr_db": -3.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_002",
+    "timestamp": "2026-10-26T14:02:00Z",
+    "rx_coordinate": {
+      "lat": 44.4950,
+      "lon": -73.0980,
+      "elevation_m": 112.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -97.5,
+    "snr_db": -2.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_003",
+    "timestamp": "2026-10-26T14:04:00Z",
+    "rx_coordinate": {
+      "lat": 44.5010,
+      "lon": -73.0830,
+      "elevation_m": 118.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -96.0,
+    "snr_db": -1.5,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_004",
+    "timestamp": "2026-10-26T14:06:00Z",
+    "rx_coordinate": {
+      "lat": 44.5070,
+      "lon": -73.0680,
+      "elevation_m": 122.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -95.0,
+    "snr_db": -1.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_005",
+    "timestamp": "2026-10-26T14:08:00Z",
+    "rx_coordinate": {
+      "lat": 44.5150,
+      "lon": -73.0500,
+      "elevation_m": 130.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -94.0,
+    "snr_db": 0.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_006",
+    "timestamp": "2026-10-26T14:10:00Z",
+    "rx_coordinate": {
+      "lat": 44.5120,
+      "lon": -73.0320,
+      "elevation_m": 138.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -93.0,
+    "snr_db": 1.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_007",
+    "timestamp": "2026-10-26T14:12:00Z",
+    "rx_coordinate": {
+      "lat": 44.5090,
+      "lon": -73.0150,
+      "elevation_m": 145.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -92.0,
+    "snr_db": 1.5,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_008",
+    "timestamp": "2026-10-26T14:14:00Z",
+    "rx_coordinate": {
+      "lat": 44.5060,
+      "lon": -72.9980,
+      "elevation_m": 155.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -91.0,
+    "snr_db": 2.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_009",
+    "timestamp": "2026-10-26T14:16:00Z",
+    "rx_coordinate": {
+      "lat": 44.5045,
+      "lon": -72.9800,
+      "elevation_m": 168.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -90.0,
+    "snr_db": 2.5,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_010",
+    "timestamp": "2026-10-26T14:18:00Z",
+    "rx_coordinate": {
+      "lat": 44.5075,
+      "lon": -72.9650,
+      "elevation_m": 178.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -89.0,
+    "snr_db": 3.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_011",
+    "timestamp": "2026-10-26T14:20:00Z",
+    "rx_coordinate": {
+      "lat": 44.5120,
+      "lon": -72.9520,
+      "elevation_m": 185.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -88.0,
+    "snr_db": 3.5,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_012",
+    "timestamp": "2026-10-26T14:22:00Z",
+    "rx_coordinate": {
+      "lat": 44.5170,
+      "lon": -72.9400,
+      "elevation_m": 192.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -87.0,
+    "snr_db": 4.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_013",
+    "timestamp": "2026-10-26T14:24:00Z",
+    "rx_coordinate": {
+      "lat": 44.5210,
+      "lon": -72.9280,
+      "elevation_m": 198.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -86.0,
+    "snr_db": 5.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_014",
+    "timestamp": "2026-10-26T14:26:00Z",
+    "rx_coordinate": {
+      "lat": 44.5240,
+      "lon": -72.9150,
+      "elevation_m": 205.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -85.0,
+    "snr_db": 5.5,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_015",
+    "timestamp": "2026-10-26T14:28:00Z",
+    "rx_coordinate": {
+      "lat": 44.5260,
+      "lon": -72.9050,
+      "elevation_m": 210.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -84.0,
+    "snr_db": 6.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_016",
+    "timestamp": "2026-10-26T14:30:00Z",
+    "rx_coordinate": {
+      "lat": 44.5275,
+      "lon": -72.8950,
+      "elevation_m": 215.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -83.0,
+    "snr_db": 6.5,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_017",
+    "timestamp": "2026-10-26T14:32:00Z",
+    "rx_coordinate": {
+      "lat": 44.5310,
+      "lon": -72.8830,
+      "elevation_m": 225.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -82.0,
+    "snr_db": 7.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  },
+  {
+    "packet_id": "pkt_018",
+    "timestamp": "2026-10-26T14:34:00Z",
+    "rx_coordinate": {
+      "lat": 44.5350,
+      "lon": -72.8700,
+      "elevation_m": 240.0
+    },
+    "tx_node_id": "VT-MANS-01",
+    "rx_node_id": "VT-MOBI-01",
+    "rssi_dbm": -81.0,
+    "snr_db": 8.0,
+    "frequency_mhz": 915.0,
+    "hop_limit": 3
+  }
+]

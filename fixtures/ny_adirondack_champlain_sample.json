@@ -1,0 +1,74 @@
+[
+  {
+    "site_id": "NY-ESSE-WHIT-01",
+    "name": "Whiteface Mountain Summit Castle",
+    "county": "Essex",
+    "location": {
+      "lat": 44.3658,
+      "lon": -73.9028,
+      "elevation_m": 1483.0
+    },
+    "site_type": "mountain_summit",
+    "mast_height_m": 25.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "source_url": "https://www.asrc.albany.edu/research/whiteface-mountain",
+    "notes": "Premier High Peaks research summit overlooking Lake Champlain basin and Green Mountains"
+  },
+  {
+    "site_id": "NY-CLIN-LYON-01",
+    "name": "Lyon Mountain Fire Tower Summit",
+    "county": "Clinton",
+    "location": {
+      "lat": 44.7042,
+      "lon": -73.9236,
+      "elevation_m": 1167.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 12.0,
+    "access_difficulty": "hike_in",
+    "has_grid_power": false,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://dec.ny.gov/places/lyon-mountain-fire-tower",
+    "notes": "Northern Adirondack sentinel overlooking Plattsburgh, Montreal, and Northwest Vermont"
+  },
+  {
+    "site_id": "NY-ESSE-POKE-01",
+    "name": "Poke-O-Moonshine Fire Tower",
+    "county": "Essex",
+    "location": {
+      "lat": 44.3917,
+      "lon": -73.5083,
+      "elevation_m": 664.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 10.0,
+    "access_difficulty": "hike_in",
+    "has_grid_power": false,
+    "solar_exposure_pct": 85.0,
+    "is_public_land": true,
+    "source_url": "https://dec.ny.gov/places/poke-o-moonshine-mountain-fire-tower",
+    "notes": "High cliff bluff overlooking Lake Champlain western shore and Burlington VT"
+  },
+  {
+    "site_id": "NY-WARR-PROS-01",
+    "name": "Prospect Mountain Veterans Memorial Peak",
+    "county": "Warren",
+    "location": {
+      "lat": 43.4247,
+      "lon": -73.7469,
+      "elevation_m": 620.0
+    },
+    "site_type": "communications_tower",
+    "mast_height_m": 15.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://dec.ny.gov/places/prospect-mountain-veterans-memorial-highway",
+    "notes": "Lake George and southern Champlain corridor high site"
+  }
+]

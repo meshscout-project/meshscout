@@ -1,0 +1,38 @@
+[
+  {
+    "site_id": "ME-FRAN-SUGA-01",
+    "name": "Sugarloaf Mountain Summit",
+    "county": "Franklin",
+    "location": {
+      "lat": 45.0314,
+      "lon": -70.3133,
+      "elevation_m": 1292.0
+    },
+    "site_type": "mountain_summit",
+    "mast_height_m": 15.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "source_url": "https://www.sugarloaf.com",
+    "notes": "Second highest peak in Maine | Western Maine backbone overlooking Carrabassett Valley"
+  },
+  {
+    "site_id": "ME-OXFO-PLEA-01",
+    "name": "Pleasant Mountain Fire Tower",
+    "county": "Oxford",
+    "location": {
+      "lat": 44.0289,
+      "lon": -70.8250,
+      "elevation_m": 612.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 12.0,
+    "access_difficulty": "hike_in",
+    "has_grid_power": false,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://mainelandtrusts.org",
+    "notes": "Prominent Southern Maine monadnock with line of sight to Mount Washington (40km) and Sebago Lake"
+  }
+]

@@ -1,0 +1,1845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>M E S H S C O U T // v0.12.1 WORKBENCH — LoRa / Meshtastic / MeshCore RF Topology</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <!-- Optional Leaflet CSS for online tile overlay; workbench includes native vector geodetic map engine -->
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
+  <style>
+    .map-attribution-footer {
+      position: absolute;
+      bottom: 8px;
+      left: 10px;
+      z-index: 999;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid var(--border-color, #334155);
+      color: var(--text-muted, #94a3b8);
+      font-family: monospace;
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 2px;
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 80%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      backdrop-filter: blur(4px);
+    }
+    .map-attribution-footer .attribution-label {
+      color: var(--accent-cyan, #06b6d4);
+      font-weight: bold;
+    }
+    .packs-list .pack-card {
+      margin-bottom: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border-color, #334155);
+      background: var(--bg-surface, #1e293b);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="workbench-shell">
+    <!-- TOP COMMAND HEADER -->
+    <header class="command-header" role="banner">
+      <div class="brand-cluster">
+        <div class="brand-title-row">
+          <span class="status-led" aria-hidden="true"></span>
+          <h1 class="brand-title">M E S H S C O U T // <span id="brand-version">v0.12.1</span> WORKBENCH</h1>
+          <span id="maidenhead-badge" class="telemetry-badge" title="Amateur Radio Maidenhead Grid Square">FN34jl</span>
+        </div>
+        <div class="persisted-loc-bar">
+          <span class="meta-label">HOME NODE:</span>
+          <span id="persisted-location-label" class="meta-value">Burlington Home Node (44.4759, -73.2121 | 61m ASL)</span>
+        </div>
+      </div>
+
+      <form id="geocode-form" class="geocode-cluster" autocomplete="off">
+        <div class="input-group">
+          <label for="geocode-input" class="sr-only">Address, ZIP, Landmark, or Coordinates</label>
+          <input
+            id="geocode-input"
+            type="text"
+            class="brutal-input geocode-search-input"
+            placeholder="e.g. 05401, Burlington, Stowe, or 44.48,-73.21"
+            value="05401"
+          />
+          <button id="geocode-submit-btn" type="submit" class="brutal-btn btn-primary">
+            Locate &amp; Set Home
+          </button>
+        </div>
+        <label class="fuzz-toggle" title="Snap coordinates to a ~200m deterministic privacy cell so rooftop addresses are never exposed">
+          <input id="privacy-fuzz-checkbox" type="checkbox" checked />
+          <span>Privacy Fuzz (~200m)</span>
+        </label>
+      </form>
+
+      <div class="presets-cluster header-controls" role="group" aria-label="Radio, Protocol, and Seasonal Profiles">
+        <div class="preset-field">
+          <label for="state-select">STATE</label>
+          <select id="state-select" class="brutal-select">
+            <optgroup label="United States">
+              <option value="VT" selected>VT - Vermont</option>
+              <option value="NH">NH - New Hampshire</option>
+              <option value="NY">NY - New York</option>
+              <option value="ME">ME - Maine</option>
+              <option value="MA">MA - Massachusetts</option>
+            </optgroup>
+            <optgroup label="Canada">
+              <option value="CA_QC">QC - Quebec</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <div class="preset-field">
+          <label for="county-select" id="county-select-label">SUBREGION / COUNTY</label>
+          <select id="county-select" class="brutal-select">
+            <option value="Chittenden" selected>Chittenden County (34 Sites)</option>
+            <option value="Addison">Addison County</option>
+            <option value="Bennington">Bennington County</option>
+            <option value="Caledonia">Caledonia County</option>
+            <option value="Essex">Essex County</option>
+            <option value="Franklin">Franklin County</option>
+            <option value="Grand Isle">Grand Isle County</option>
+            <option value="Lamoille">Lamoille County</option>
+            <option value="Orange">Orange County</option>
+            <option value="Orleans">Orleans County</option>
+            <option value="Rutland">Rutland County</option>
+            <option value="Washington">Washington County</option>
+            <option value="Windham">Windham County</option>
+            <option value="Windsor">Windsor County</option>
+          </select>
+        </div>
+
+        <div class="preset-field">
+          <label for="hardware-select">HARDWARE PRESET</label>
+          <select id="hardware-select" class="brutal-select">
+            <option value="RAK4631_SOLAR">RAK4631 Solar (22dBm + 5.8dBi)</option>
+            <option value="STATION_G2_BACKBONE">Station G2 (30dBm + 8dBi + Cavity)</option>
+            <option value="HELTEC_V3_HOME">Heltec V3 (22dBm + 3dBi Whip)</option>
+            <option value="SENSECAP_T1000E">SenseCAP T1000-E (20dBm Pocket)</option>
+          </select>
+        </div>
+
+        <div class="preset-field">
+          <label for="protocol-select">PROTOCOL</label>
+          <select id="protocol-select" class="brutal-select">
+            <option value="MESHTASTIC_LONGFAST">Meshtastic LongFast (SF11 / 250kHz)</option>
+            <option value="MESHTASTIC_MEDIUMFAST">Meshtastic MediumFast (SF9 / 250kHz)</option>
+            <option value="MESHCORE_NARROW">MeshCore Narrow (SF11 / 62.5kHz)</option>
+            <option value="MESHCORE_STANDARD">MeshCore Standard (SF10 / 125kHz)</option>
+          </select>
+        </div>
+
+        <div class="preset-field">
+          <label for="season-select">SEASON / FOLIAGE</label>
+          <select id="season-select" class="brutal-select">
+            <option value="WINTER_LEAF_OFF">Winter Leaf-Off (0.0 dB)</option>
+            <option value="SUMMER_LEAF_ON">Summer Leaf-On (+8.5dB Canopy)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions-cluster header-actions">
+        <!-- Miles vs KM Distance Unit Switcher (Default: Miles in US) -->
+        <div class="unit-toggle-cluster" role="group" aria-label="Distance Units (Miles vs Kilometers)">
+          <button id="unit-miles-btn" type="button" class="unit-btn active" title="Display distances in US Statute Miles (mi)">MILES</button>
+          <button id="unit-km-btn" type="button" class="unit-btn" title="Display distances in Metric Kilometers (km)">KM</button>
+        </div>
+
+        <button id="fieldkit-open-btn" type="button" class="brutal-btn" title="Stage Offline Field Kit to USB / Local Folder">📦 Field Kit</button>
+        <button id="tutorial-open-btn" type="button" class="brutal-btn" title="Open Interactive Tutorial &amp; UI Guide" aria-label="? Help / Tutorial — Guide">
+          ? Guide<span class="sr-only"> / Help / Tutorial</span>
+        </button>
+        <button id="export-json-btn" type="button" class="brutal-btn btn-xs" title="Export privacy-fuzzed Living Mesh Club JSON">
+          JSON
+        </button>
+        <button id="export-gpx-btn" type="button" class="brutal-btn btn-xs" title="Export GPS Waypoints XML for ATAK, Garmin, and OsmAnd">
+          GPX
+        </button>
+        <button id="export-kml-btn" type="button" class="brutal-btn btn-xs" title="Export Google Earth / GIS Topology KML">
+          KML
+        </button>
+        <button id="export-html-btn" type="button" class="brutal-btn btn-xs btn-accent" title="Download standalone Portable HTML Report">
+          Portable HTML
+        </button>
+
+        <!-- Sidebar Collapse / Shrink Toggle Button (Anchored to right edge above sidebar) -->
+        <button id="toggle-sidebar-btn" type="button" class="brutal-btn btn-xs" title="Toggle Sidebar Panel (Collapse / Expand) [Ctrl+B]">
+          <span id="sidebar-toggle-icon">▶</span> <span id="sidebar-toggle-text">Collapse</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN SPLIT-PANE WORKSPACE -->
+    <main class="workspace-grid">
+      <!-- LEFT / CENTER COLUMN: MAP CANVAS + BOTTOM SVG FRESNEL DOCK -->
+      <section class="left-pane" aria-label="Geodetic Map and Fresnel Cross-Section">
+        <div class="map-frame">
+          <div class="map-toolbar">
+            <div class="map-top-bar">
+              <div class="map-controls">
+                <span id="map-mode-indicator" class="telemetry-pill">GEODETIC VECTOR + TILE ENGINE</span>
+                <div class="map-mode-segmented-group" role="group" aria-label="Map Display Engine">
+                  <button id="map-mode-vector-btn" type="button" class="brutal-btn btn-xs map-seg-btn active" title="Offline Tactical Vector Map (No internet required)">
+                    Offline Topo
+                  </button>
+                  <button id="map-mode-tiles-btn" type="button" class="brutal-btn btn-xs map-seg-btn" title="Online OpenStreetMap Street Tiles (Requires internet)">
+                    Street Map
+                  </button>
+                </div>
+                <button id="reset-view-btn" type="button" class="brutal-btn btn-xs">
+                  Center Home
+                </button>
+                <button id="drop-pin-btn" type="button" class="brutal-btn btn-xs" title="Drop Temporary Tactical Pin on Map (Barn, House on Hill, Church Steeple)">
+                  📍 Drop Pin
+                </button>
+                <button id="clear-selection-btn" type="button" class="brutal-btn btn-xs btn-clear-selection" title="Clear Active Tower/Site Selection, What-If Planning &amp; Overlays (Esc)">
+                  ✖ Clear Selection
+                </button>
+                <button id="map-expand-sidebar-btn" type="button" class="brutal-btn btn-xs btn-primary" style="display:none;" title="Expand Workbench Sidebar Panel">
+                  ◀ Workbench
+                </button>
+              </div>
+              <span id="map-cursor-pill" class="telemetry-badge" title="Live Cursor Coordinates &amp; Maidenhead Grid">CURSOR: --</span>
+            </div>
+
+            <div class="map-layer-bar" id="map-layer-bar">
+              <div class="map-layer-header">
+                <div class="map-legend">
+                  <span class="legend-item"><i class="dot dot-home"></i> Home Node</span>
+                  <span class="legend-item"><i class="dot dot-active"></i> Active On-Air</span>
+                  <span class="legend-item"><i class="dot dot-candidate"></i> Candidate</span>
+                  <span class="legend-item heatmap-legend" title="Signal Quality Heatmap: &gt;15dB LOS (Emerald) | 6-15dB (Cyan) | 0-6dB (Amber)">
+                    <span class="heatmap-swatch"></span>
+                    <span class="heatmap-legend-label">Heatmap</span>
+                  </span>
+                </div>
+                <button id="toggle-all-layers-btn" type="button" class="brutal-btn btn-xs btn-layer-collapse" title="Collapse / Expand Layer Bar">
+                  [▾ Layers Panel]
+                </button>
+              </div>
+
+              <div id="layer-groups-container" class="layer-groups-container">
+                <!-- GROUP 1: RF & TOPOLOGY -->
+                <div class="layer-group" id="layer-group-rf">
+                  <div class="layer-group-header" data-group="rf">
+                    <span class="group-title">📡 RF &amp; TOPOLOGY</span>
+                    <span class="group-count-badge" id="rf-group-count"></span>
+                    <span class="group-toggle-arrow">▾</span>
+                  </div>
+                  <div class="layer-group-body" id="layer-group-rf-body">
+                    <!-- Towers, Heatmap, Active Coverage, What-If, Meshtastic, MeshCore, Gaps -->
+                    <label class="layer-toggle-btn" title="Toggle Towers &amp; Candidate High Sites">
+                      <input type="checkbox" id="toggle-layer-towers" data-layer="towers" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Towers</span>
+                    </label>
+                    <label class="layer-toggle-btn" title="Toggle Signal Quality / Viewshed Heatmap Layer">
+                      <input type="checkbox" id="toggle-layer-heatmap" data-layer="heatmap" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Heatmap</span>
+                    </label>
+                    <label class="layer-toggle-btn toggle-label" title="Topographic Viewshed of all Active On-Air Nodes (Emerald)">
+                      <input type="checkbox" id="layer-active-coverage" data-layer="active-coverage" />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Active Network Coverage</span>
+                    </label>
+                    <label class="layer-toggle-btn toggle-label" title="Topographic Viewshed of Selected What-If Candidates &amp; Tactical Pins (Cyan)">
+                      <input type="checkbox" id="layer-whatif-coverage" data-layer="whatif-coverage" />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">What-If Coverage</span>
+                    </label>
+                    <label class="layer-toggle-btn toggle-label" title="Toggle Heard Meshtastic Live Nodes">
+                      <input type="checkbox" id="layer-meshtastic-nodes" data-layer="meshtastic-nodes" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Meshtastic Nodes</span>
+                    </label>
+                    <label class="layer-toggle-btn toggle-label" title="Toggle MeshCore / Reticulum Identity Nodes">
+                      <input type="checkbox" id="layer-meshcore-nodes" data-layer="meshcore-nodes" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">MeshCore Nodes</span>
+                    </label>
+                    <label class="layer-toggle-btn toggle-label" title="Toggle Unobserved Municipal Coverage Gaps">
+                      <input type="checkbox" id="layer-coverage-gaps" data-layer="coverage-gaps" />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Coverage Gaps</span>
+                    </label>
+                    <div class="layer-group-subgroup civic-tower-layer-bar" id="civic-tower-layer-bar">
+                      <span class="subgroup-title" title="Prioritizing Low-Friction Municipal &amp; Civic Structures">CIVIC HIGH-SITES:</span>
+                      <span class="sr-only">INFRASTRUCTURE &amp; CIVIC HIGH-SITES — Prioritizing Low-Friction Municipal &amp; Civic Structures</span>
+                      <label class="layer-toggle-btn" title="Toggle Fire Lookouts (Tier 1 Civic / Public Safety)">
+                        <input type="checkbox" id="layer-fire-lookouts" checked />
+                        <span class="toggle-indicator"></span>
+                        <span class="toggle-text">Fire Lookouts</span>
+                      </label>
+                      <label class="layer-toggle-btn" title="Toggle Water Towers (Tier 1 Civic / Public Safety)">
+                        <input type="checkbox" id="layer-water-towers" checked />
+                        <span class="toggle-indicator"></span>
+                        <span class="toggle-text">Water Towers</span>
+                      </label>
+                      <label class="layer-toggle-btn" title="Toggle Research Masts (Tier 1 Civic / University)">
+                        <input type="checkbox" id="layer-research-towers" checked />
+                        <span class="toggle-indicator"></span>
+                        <span class="toggle-text">Research Masts</span>
+                      </label>
+                      <label class="layer-toggle-btn" title="Toggle Agricultural Silos (Tier 2 Agricultural / Co-op)">
+                        <input type="checkbox" id="layer-silos" checked />
+                        <span class="toggle-indicator"></span>
+                        <span class="toggle-text">Agricultural Silos</span>
+                      </label>
+                      <label class="layer-toggle-btn" title="Toggle Commercial Leased Towers (Tier 3 Commercial - High Carrier Rent Noise)">
+                        <input type="checkbox" id="layer-commercial-towers" />
+                        <span class="toggle-indicator"></span>
+                        <span class="toggle-text">Commercial Leased Towers</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- GROUP 2: TACTICAL OVERLAYS (BOTH STREET & VECTOR) -->
+                <div class="layer-group" id="layer-group-tactical">
+                  <div class="layer-group-header" data-group="tactical">
+                    <span class="group-title">🎯 TACTICAL OVERLAYS</span>
+                    <span class="group-count-badge" id="tactical-group-count"></span>
+                    <span class="group-toggle-arrow">▾</span>
+                  </div>
+                  <div class="layer-group-body" id="layer-group-tactical-body">
+                    <!-- Preserve toggle-layer-graticule, toggle-layer-counties, toggle-layer-spine -->
+                    <label class="layer-toggle-btn" title="Toggle Amateur Radio Maidenhead Grid Squares (e.g. FN34)">
+                      <input type="checkbox" id="toggle-layer-graticule" data-layer="graticule" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Graticule</span>
+                    </label>
+                    <label class="layer-toggle-btn" title="Toggle Vermont County Borders">
+                      <input type="checkbox" id="toggle-layer-counties" data-layer="counties" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Counties</span>
+                    </label>
+                    <label class="layer-toggle-btn" title="Toggle Green Mountain Spine &amp; Summits">
+                      <input type="checkbox" id="toggle-layer-spine" data-layer="spine" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Spine</span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- GROUP 3: VECTOR BASEMAP -->
+                <div class="layer-group" id="layer-group-vector">
+                  <div class="layer-group-header" data-group="vector">
+                    <span class="group-title">🗺️ VECTOR BASEMAP <span class="vector-only-pill" title="Rendered in native vector map; OpenStreetMap provides these in Tile Overlay">[Vector Map]</span></span>
+                    <span class="group-count-badge" id="vector-group-count"></span>
+                    <span class="group-toggle-arrow">▾</span>
+                  </div>
+                  <div class="layer-group-body" id="layer-group-vector-body">
+                    <!-- Preserve toggle-layer-water, toggle-layer-corridors, toggle-layer-towns -->
+                    <label class="layer-toggle-btn" title="Toggle Water Bodies &amp; River Corridors">
+                      <input type="checkbox" id="toggle-layer-water" data-layer="water" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Water</span>
+                    </label>
+                    <label class="layer-toggle-btn" title="Toggle Highway RF Corridors">
+                      <input type="checkbox" id="toggle-layer-corridors" data-layer="corridors" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Corridors</span>
+                    </label>
+                    <label class="layer-toggle-btn" title="Toggle Reference Towns">
+                      <input type="checkbox" id="toggle-layer-towns" data-layer="towns" checked />
+                      <span class="toggle-indicator"></span>
+                      <span class="toggle-text">Towns</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="map-container" class="map-canvas-wrap">
+            <!-- Optional Leaflet container when online tiles are active -->
+            <div id="leaflet-map" class="leaflet-layer-host" aria-hidden="true"></div>
+            <!-- Always-available deterministic SVG Geodetic & Topographic Map -->
+            <svg
+              id="vector-map-svg"
+              class="vector-map-canvas"
+              viewBox="0 0 900 440"
+              preserveAspectRatio="xMidYMid meet"
+              role="img"
+              aria-label="Interactive Regional Mesh Topology Map"
+            ></svg>
+            <!-- Universal Clear Selection Button in Corner of Map -->
+            <button
+              id="map-corner-clear-btn"
+              type="button"
+              class="brutal-btn btn-xs map-corner-clear-btn"
+              title="Clear Active Tower/Site Selection, What-If Planning &amp; Overlays (Esc)"
+            >
+              ✖ Clear Selection
+            </button>
+            <!-- Picture-in-Picture Minimap (TASK-1028) -->
+            <div id="map-minimap" class="map-minimap" title="Click anywhere on minimap to center viewport" role="region" aria-label="Regional Minimap">
+              <div class="minimap-header"><span>VT VIEWPORT</span></div>
+              <svg id="minimap-svg" viewBox="0 0 100 120" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+            </div>
+
+            <!-- What-If Scenario Floating Drawer / Status Bar (TASK-1106) -->
+            <div id="whatif-scenario-panel" class="whatif-scenario-panel hidden" role="region" aria-label="What-If Scenario Status Bar">
+              <div class="whatif-panel-header">
+                <span class="telemetry-badge whatif-badge">⚡ WHAT-IF</span>
+                <span class="whatif-panel-desc">Tactical Coverage &amp; Backhaul Evaluation</span>
+              </div>
+              <div class="whatif-metrics">
+                <div class="whatif-metric-group">
+                  <span class="whatif-label">SITES:</span>
+                  <span id="whatif-site-count" class="whatif-value">0 sites</span>
+                </div>
+                <div class="whatif-metric-group">
+                  <span class="whatif-label">ILLUMINATED AREA:</span>
+                  <span id="whatif-total-area" class="whatif-value">0.0 km²</span>
+                </div>
+                <div class="whatif-metric-group">
+                  <span class="whatif-label">TOWNS REACHED:</span>
+                  <span id="whatif-towns-count" class="whatif-value">0 towns</span>
+                </div>
+                <div class="whatif-metric-group">
+                  <span class="whatif-label">BACKHAUL STATUS:</span>
+                  <span id="whatif-backhaul-status" class="whatif-value">--</span>
+                </div>
+              </div>
+              <div class="whatif-actions">
+                <button id="whatif-clear-btn" type="button" class="brutal-btn btn-xs">Clear All</button>
+              </div>
+            </div>
+
+            <!-- Source Attribution Badge / Footer in Map Interface (TASK-1137) -->
+            <div id="map-attribution-footer" class="map-attribution-footer" role="contentinfo" aria-label="Map Data Attribution">
+              <span class="attribution-label">SOURCES:</span>
+              <span id="attribution-content">FCC ASR | ISED SMS | &copy; OpenStreetMap contributors</span>
+            </div>
+
+            <!-- License Attribution Chip: ODbL 1.0 for Civic Infrastructure (TASK-007) -->
+            <div id="odbl-attribution-chip" class="odbl-attribution-chip" style="display: none;" role="note" aria-label="OpenStreetMap ODbL Attribution">
+              &copy; OpenStreetMap contributors (ODbL 1.0)
+            </div>
+          </div>
+
+          <!-- Selected Site Quick-Action Bar -->
+          <div id="selected-site-bar" class="selected-site-bar">
+            <div class="selected-site-info">
+              <span class="site-tag" id="sel-site-id">VT-PEAK-01</span>
+              <strong id="sel-site-name">Mount Mansfield Summit</strong>
+              <span class="site-meta" id="sel-site-meta">mountain_peak | 1339m ASL + 15m AGL | Score: 88.5</span>
+            </div>
+            <div class="selected-site-actions">
+              <button type="button" class="brutal-btn btn-xs status-quick-btn" data-status="active_on_air">
+                Set Active On-Air
+              </button>
+              <button type="button" class="brutal-btn btn-xs status-quick-btn" data-status="testing">
+                Set Testing
+              </button>
+              <button type="button" class="brutal-btn btn-xs status-quick-btn" data-status="candidate">
+                Set Candidate
+              </button>
+              <button type="button" id="sel-chain-btn" class="brutal-btn btn-xs" title="Add site to multi-hop trunk corridor chain">
+                [🔗 + Chain]
+              </button>
+              <button type="button" id="sel-node-a-btn" class="brutal-btn btn-xs" title="Set as Node A (Origin)">
+                [🎯 Node A]
+              </button>
+              <button type="button" id="sel-node-b-btn" class="brutal-btn btn-xs" title="Set as Node B (Target)">
+                [🎯 Node B]
+              </button>
+              <button type="button" id="sel-whatif-btn" class="brutal-btn btn-xs whatif-toggle-btn" title="Toggle candidate in What-If scenario">
+                [+ What-If]
+              </button>
+              <button type="button" id="sel-landowner-brief-btn" class="brutal-btn btn-xs btn-accent" title="Open Landowner Host Brief &amp; Equipment MOU">
+                [📄 Landowner Brief]
+              </button>
+              <button type="button" id="sel-solar-sizing-btn" class="brutal-btn btn-xs" title="Open Winter Solar &amp; Battery Autonomy Calculator">
+                [☀️ Solar Sizing]
+              </button>
+              <button type="button" id="open-pitch-sheet-btn" class="brutal-btn btn-xs btn-accent">
+                1-Page Landowner Pitch Sheet
+              </button>
+              <button type="button" id="open-survey-sheet-btn" class="brutal-btn btn-xs" title="Open Printable Technical Link Survey Dossier">
+                Link Survey Sheet
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- BOTTOM DOCK: INTERACTIVE SVG TERRAIN & 60% FIRST FRESNEL ZONE CROSS-SECTION -->
+        <div id="fresnel-chart" class="fresnel-dock fresnel-section link-inspection-panel" aria-label="Terrain and 60% First Fresnel Zone Cross-Section">
+          <div class="fresnel-header dock-header">
+            <div class="fresnel-title-block">
+              <span class="section-kicker">PATH PROFILE // k=4/3 EARTH CURVATURE &amp; 60% F1 CLEARANCE</span>
+              <h2 id="fresnel-link-title" class="fresnel-title">
+                HOME-NODE (Burlington) &rarr; VT-PEAK-01 (Mount Mansfield)
+              </h2>
+            </div>
+
+            <!-- RF Link Mode Switcher (TASK-1032) -->
+            <div class="link-mode-bar" role="toolbar" aria-label="RF Link Evaluation Mode">
+              <div class="link-mode-segmented-btn" role="group" aria-label="Link Evaluation Mode Toggle">
+                <button
+                  type="button"
+                  id="mode-home-btn"
+                  class="mode-seg-btn active"
+                  data-mode="home"
+                  title="Evaluate RF link from Home Node to selected mountain or municipal tower"
+                >
+                  Home Link (Home &rarr; Site)
+                </button>
+                <button
+                  type="button"
+                  id="mode-backhaul-btn"
+                  class="mode-seg-btn"
+                  data-mode="backhaul"
+                  title="Plan backbone link directly between two candidate sites (Node A &rarr; Node B)"
+                >
+                  Site-to-Site Backhaul (Node A &rarr; Node B)
+                </button>
+              </div>
+            </div>
+
+            <div class="telemetry-strip" id="fresnel-telemetry-strip">
+              <div class="tel-cell">
+                <span class="tel-label">Distance</span>
+                <span class="tel-val" id="tel-distance">--</span>
+              </div>
+              <div class="tel-cell">
+                <span class="tel-label">FSPL</span>
+                <span class="tel-val" id="tel-fspl">-- dB</span>
+              </div>
+              <div class="tel-cell">
+                <span class="tel-label">Bullington Diff</span>
+                <span class="tel-val" id="tel-diff">-- dB</span>
+              </div>
+              <div class="tel-cell">
+                <span class="tel-label">RX Power</span>
+                <span class="tel-val" id="tel-rx">-- dBm</span>
+              </div>
+              <div class="tel-cell">
+                <span class="tel-label">Fade Margin</span>
+                <span class="tel-val" id="tel-margin">-- dB</span>
+              </div>
+              <div class="tel-cell">
+                <span class="tel-label">60% Fresnel Clear</span>
+                <span class="tel-val" id="tel-fresnel-clear">--</span>
+              </div>
+              <div class="tel-cell" id="tel-downtilt-cell" title="Antenna Mechanical Look-Down Angle and Vertical Beamwidth Alignment">
+                <span class="tel-label">Antenna Tilt</span>
+                <span class="tel-val" id="tel-downtilt">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Interactive Mast Height Sliders Control Cluster (TASK-1116) -->
+          <div id="mast-height-sliders-panel" class="mast-sliders-panel">
+            <div class="mast-slider-row">
+              <label for="origin-mast-slider" class="mast-slider-label">
+                <span>ORIGIN MAST (AGL):</span>
+                <strong id="origin-mast-val">10m</strong>
+              </label>
+              <input type="range" id="origin-mast-slider" class="brutal-slider" min="3" max="45" step="1" value="10" />
+            </div>
+            <div class="mast-slider-row">
+              <label for="target-mast-slider" class="mast-slider-label">
+                <span>TARGET MAST (AGL):</span>
+                <strong id="target-mast-val">5m</strong>
+              </label>
+              <input type="range" id="target-mast-slider" class="brutal-slider" min="3" max="45" step="1" value="5" />
+            </div>
+            <div class="mast-clearance-indicator" id="mast-clearance-indicator">
+              <span class="telemetry-badge badge-fresnel-clear" id="fresnel-dynamic-badge">60% FRESNEL CLEAR</span>
+            </div>
+          </div>
+
+          <!-- Site-to-Site Backhaul Control Bar (TASK-1032) -->
+          <div id="backhaul-control-bar" class="backhaul-control-bar dock-strip" style="display: none;" aria-label="Site-to-Site Backhaul Site Selectors">
+            <span class="telemetry-badge backhaul-badge">BACKHAUL LINK</span>
+            <div class="backhaul-node-select-wrap">
+              <label for="backhaul-node-a" class="backhaul-label">NODE A (ORIGIN):</label>
+              <div class="select-with-pick-row">
+                <select id="backhaul-node-a" class="brutal-select backhaul-select" aria-label="Node A (Origin Site)"></select>
+                <button type="button" id="backhaul-pick-a-btn" class="brutal-btn btn-xs backhaul-pick-btn" title="Pick Node A directly from the map">🎯 Map Pick</button>
+              </div>
+            </div>
+            <button
+              type="button"
+              id="backhaul-swap-btn"
+              class="brutal-btn btn-xs backhaul-swap-btn"
+              title="Swap Node A and Node B"
+              aria-label="Swap Origin and Target Nodes"
+            >
+              ⇄
+            </button>
+            <div class="backhaul-node-select-wrap">
+              <label for="backhaul-node-b" class="backhaul-label">NODE B (TARGET):</label>
+              <div class="select-with-pick-row">
+                <select id="backhaul-node-b" class="brutal-select backhaul-select" aria-label="Node B (Target Site)"></select>
+                <button type="button" id="backhaul-pick-b-btn" class="brutal-btn btn-xs backhaul-pick-btn" title="Pick Node B directly from the map">🎯 Map Pick</button>
+              </div>
+            </div>
+            <button
+              type="button"
+              id="trace-route-btn"
+              class="brutal-btn btn-xs btn-accent"
+              title="Trace optimal multi-hop mesh route bridging Node A and Node B"
+            >
+              ⚡ Trace Route
+            </button>
+            <span id="mesh-route-telemetry" class="telemetry-badge" style="display: none;"></span>
+            <span id="backhaul-pick-indicator" class="telemetry-badge pick-indicator" style="display: none;">CLICK TOWER ON MAP</span>
+            <span class="backhaul-tip-text">Click towers on map or choose above to calculate point-to-point link</span>
+
+            <div id="backhaul-corridor-section" class="backhaul-corridor-section">
+              <div class="backhaul-corridor-header">
+                <span class="corridor-title-badge">🔗 MULTI-HOP TRUNK CORRIDOR BUILDER</span>
+                <span class="corridor-subtitle">Chain relay high-sites across basins &amp; borders</span>
+              </div>
+              <div class="corridor-chain-wrapper">
+                <div id="corridor-chain-chips" class="corridor-chain-chips">
+                  <span class="corridor-empty-placeholder">Click "[🔗 + Chain]" on any tower/node popup to chain relay hops</span>
+                </div>
+                <div class="corridor-actions-row">
+                  <button id="corridor-pick-btn" type="button" class="brutal-btn btn-sm" title="Click sites directly on the map sequentially to append to the chain">
+                    🎯 Pick on Map
+                  </button>
+                  <button id="corridor-eval-btn" type="button" class="brutal-btn btn-sm btn-primary" disabled>
+                    ⚡ Evaluate Corridor
+                  </button>
+                  <button id="corridor-clear-btn" type="button" class="brutal-btn btn-sm btn-clear-selection">
+                    ✖ Clear Chain
+                  </button>
+                </div>
+              </div>
+              <div id="corridor-results-card" class="corridor-results-card hidden">
+                <div class="corridor-summary-row">
+                  <div>HOPS: <strong id="corridor-hops-count">0</strong></div>
+                  <div>TOTAL DIST: <strong id="corridor-total-dist">0.0 km</strong></div>
+                  <div>LOS STATUS: <strong id="corridor-los-status">--</strong></div>
+                  <div>BOTTLENECK: <strong id="corridor-bottleneck">--</strong></div>
+                </div>
+                <div class="table-responsive">
+                  <table class="brutal-table corridor-hops-table">
+                    <thead>
+                      <tr>
+                        <th>Hop</th>
+                        <th>Origin</th>
+                        <th>Target</th>
+                        <th>Dist</th>
+                        <th>Elev Δ</th>
+                        <th>LOS</th>
+                        <th>Margin</th>
+                        <th>Fresnel</th>
+                      </tr>
+                    </thead>
+                    <tbody id="corridor-hops-tbody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="fresnel-svg-wrap">
+            <svg
+              id="fresnel-svg"
+              class="fresnel-svg"
+              viewBox="0 0 920 215"
+              preserveAspectRatio="none"
+              role="img"
+              aria-label="RF Path Elevation Profile and First Fresnel Zone Cross-Section"
+            ></svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT SIDEBAR: 3 INTERACTIVE WORKBENCH TABS -->
+      <aside class="right-sidebar" aria-label="Mesh Planning Workbench Tools">
+        <nav class="workbench-tabs tab-buttons" role="tablist">
+          <button
+            type="button"
+            class="tab-btn active"
+            role="tab"
+            aria-selected="true"
+            data-tab="tab-home-check"
+            title="1. My Home Checkup (360° Reach &amp; Aiming)"
+          >
+            1. Home Check
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            role="tab"
+            aria-selected="false"
+            data-tab="tab-optimizer"
+            title="2. Regional Minimum Set-Cover Backbone Optimizer"
+          >
+            2. Optimizer
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            role="tab"
+            aria-selected="false"
+            data-tab="tab-registry"
+            title="3. Living Mesh SQLite Registry &amp; Site Status"
+          >
+            3. Registry
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            role="tab"
+            aria-selected="false"
+            data-tab="tab-solar"
+            title="4. Winter Mountaintop Solar &amp; Battery Survival Simulator"
+          >
+            4. Solar
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            role="tab"
+            aria-selected="false"
+            data-tab="tab-telemetry"
+            title="5. Ground-Truth Meshtastic Wardrive Log Calibration"
+          >
+            5. Wardrive
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            role="tab"
+            aria-selected="false"
+            data-tab="tab-advisor"
+            title="6. RF Engineering Best-Practice &amp; Contention-Aware Role Advisor"
+          >
+            RF Advisor
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            role="tab"
+            aria-selected="false"
+            data-tab="tab-mqtt"
+            title="7. Meshtastic MQTT Telemetry &amp; Unobserved Municipal Coverage Gaps"
+          >
+            MQTT &amp; Gaps
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            role="tab"
+            aria-selected="false"
+            data-tab="tab-packs"
+            title="8. Regional Data Packs &amp; Infrastructure Datasets"
+            id="tab-packs-btn"
+          >
+            Regional Packs
+          </button>
+        </nav>
+
+        <!-- TAB 1: MY HOME CHECKUP (360° REACH) -->
+        <section id="tab-home-check" class="tab-panel active" role="tabpanel">
+          <div class="compass-banner">
+            <div class="compass-rose-wrap">
+              <svg id="compass-svg" viewBox="0 0 80 80" class="compass-svg" aria-hidden="true">
+                <circle cx="40" cy="40" r="34" class="compass-ring" />
+                <line x1="40" y1="6" x2="40" y2="74" class="compass-cross" />
+                <line x1="6" y1="40" x2="74" y2="40" class="compass-cross" />
+                <text x="40" y="15" text-anchor="middle" class="compass-cardinal">N</text>
+                <text x="68" y="43" text-anchor="middle" class="compass-cardinal">E</text>
+                <text x="40" y="72" text-anchor="middle" class="compass-cardinal">S</text>
+                <text x="12" y="43" text-anchor="middle" class="compass-cardinal">W</text>
+                <g id="compass-needle-group" transform="rotate(75 40 40)">
+                  <polygon points="40,10 45,40 40,34 35,40" class="compass-needle-north" />
+                  <circle cx="40" cy="40" r="3.5" class="compass-hub" />
+                </g>
+              </svg>
+            </div>
+            <div class="compass-copy">
+              <span class="section-kicker">DIRECTIONAL ANTENNA ALIGNMENT</span>
+              <div id="compass-headline" class="compass-headline">
+                POINT ANTENNA: 75&deg; ENE &rarr; Mount Mansfield
+              </div>
+              <div id="compass-subline" class="compass-subline">
+                Evaluating 34 regional high sites from home mast...
+              </div>
+            </div>
+          </div>
+
+          <div class="control-strip">
+            <div class="slider-header">
+              <label for="home-agl-slider">HOME ANTENNA HEIGHT AGL (MAST / ROOFTOP)</label>
+              <span id="home-agl-readout" class="mono-highlight">8.0 m</span>
+            </div>
+            <div class="slider-row">
+              <input
+                id="home-agl-slider"
+                type="range"
+                min="2"
+                max="25"
+                step="0.5"
+                value="8.0"
+                class="brutal-slider"
+              />
+              <button id="run-home-check-btn" type="button" class="brutal-btn btn-xs btn-primary">
+                Re-Scan 360&deg;
+              </button>
+            </div>
+          </div>
+
+          <div class="reach-kpi-row">
+            <div class="kpi-box">
+              <span class="kpi-label">ACTIVE ON-AIR REACHABLE</span>
+              <span id="kpi-active-reach" class="kpi-num">0</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">CANDIDATES REACHABLE</span>
+              <span id="kpi-candidate-reach" class="kpi-num">32</span>
+            </div>
+          </div>
+
+          <div class="table-scroll-wrap">
+            <table class="brutal-table" aria-label="Ranked Reachable Towers from Home">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Tower / High Site</th>
+                  <th>Azimuth</th>
+                  <th id="th-home-dist">Dist</th>
+                  <th>Margin</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="home-reach-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TAB 2: BACKBONE OPTIMIZER -->
+        <section id="tab-optimizer" class="tab-panel" role="tabpanel">
+          <div class="panel-intro">
+            <div class="card-header-row" style="display:flex; justify-content:space-between; align-items:center;">
+              <span class="section-kicker">GREEDY WEIGHTED MINIMUM SET-COVER</span>
+              <span id="opt-basin-badge" class="telemetry-badge">ACTIVE REGION</span>
+            </div>
+            <p class="panel-desc">
+              Solves for the minimal-cost repeater deployment schedule across the valley basin,
+              automatically locking in sites already marked <code>ACTIVE_ON_AIR</code> in the Living Mesh Registry.
+            </p>
+          </div>
+
+          <div class="control-strip">
+            <div class="slider-header">
+              <label for="opt-coverage-slider">TARGET BASIN COVERAGE THRESHOLD</label>
+              <span id="opt-coverage-readout" class="mono-highlight">90%</span>
+            </div>
+            <input
+              id="opt-coverage-slider"
+              type="range"
+              min="75"
+              max="100"
+              step="1"
+              value="90"
+              class="brutal-slider"
+            />
+            <div class="opt-Action-row">
+              <label for="opt-max-repeaters" class="inline-label">
+                Max Repeaters:
+                <input id="opt-max-repeaters" type="number" min="1" max="12" value="5" class="brutal-input input-sm" />
+              </label>
+              <button id="run-optimizer-btn" type="button" class="brutal-btn btn-primary">
+                Run Set-Cover Optimizer
+              </button>
+            </div>
+            <div class="opt-civic-toggle-row" style="margin-top: 6px;">
+              <label class="layer-toggle-btn opt-civic-toggle-label" title="Include municipal water towers, fire lookouts, and low-friction civic high-sites in backbone repeater candidate pool">
+                <input type="checkbox" id="opt-include-civic-towers" checked />
+                <span class="toggle-indicator"></span>
+                <span class="toggle-text">Include Civic High-Sites in Solver Candidate Pool</span>
+              </label>
+            </div>
+          </div>
+
+          <div id="optimizer-summary-banner" class="opt-summary-banner">
+            Click &ldquo;Run Set-Cover Optimizer&rdquo; to compute optimal rollout schedule.
+          </div>
+
+          <div class="table-scroll-wrap">
+            <table class="brutal-table" aria-label="Repeater Rollout Schedule">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th>Site</th>
+                  <th>Status</th>
+                  <th>Cum. Cov</th>
+                  <th>Score / Desense</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="optimizer-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TAB 3: LIVING MESH REGISTRY -->
+        <section id="tab-registry" class="tab-panel" role="tabpanel">
+          <div class="registry-filter-bar">
+            <input
+              id="registry-search-input"
+              type="text"
+              class="brutal-input"
+              placeholder="Filter 34 sites by name, ID, or town..."
+            />
+            <select id="filter-status-select" class="brutal-select">
+              <option value="all">All Statuses (34)</option>
+              <option value="active_on_air">Active On-Air</option>
+              <option value="testing">Testing</option>
+              <option value="candidate">Candidate</option>
+              <option value="blocked">Blocked</option>
+              <option value="dismantled">Dismantled</option>
+            </select>
+            <button
+              type="button"
+              id="propose-site-btn"
+              class="brutal-btn btn-xs btn-accent"
+              title="Propose research site or community node"
+            >
+              ➕ Propose Site
+            </button>
+            <button
+              type="button"
+              id="import-pack-btn"
+              class="brutal-btn btn-xs"
+              title="Import community site pack snapshot JSON"
+            >
+              📥 Import Pack
+            </button>
+            <button
+              type="button"
+              id="btn-open-add-site"
+              class="brutal-btn btn-xs"
+              title="Add custom tower, water tank, silo, or mountain node"
+            >
+              + Add Custom Site
+            </button>
+          </div>
+
+          <div id="registry-list-container" class="registry-cards-scroll"></div>
+        </section>
+
+        <!-- TAB 4: SOLAR SIMULATOR -->
+        <section id="tab-solar" class="tab-panel" role="tabpanel">
+          <div class="panel-intro">
+            <span class="section-kicker">WINTER SOLAR &amp; SUB-ZERO BATTERY SURVIVAL</span>
+            <p class="panel-desc">
+              Models winter insolation on a 60&deg; tilted panel, multi-day severe storm streaks (-12&deg;C, 90% cloud cover),
+              and sub-zero chemistry constraints (LiFePO4 0&deg;C lockout vs LTO -30&deg;C rugged charging).
+            </p>
+          </div>
+
+          <div class="control-strip">
+            <div class="slider-header">
+              <label for="solar-panel-slider">PHOTOVOLTAIC PANEL RATING</label>
+              <span id="solar-panel-readout" class="mono-highlight">10 W</span>
+            </div>
+            <input
+              id="solar-panel-slider"
+              type="range"
+              min="5"
+              max="50"
+              step="1"
+              value="10"
+              class="brutal-slider"
+            />
+
+            <div class="solar-param-grid">
+              <div class="preset-field">
+                <label for="solar-chem-select">BATTERY CHEMISTRY</label>
+                <select id="solar-chem-select" class="brutal-select">
+                  <option value="lto" selected>LTO (-30&deg;C Cold-Charge Rugged)</option>
+                  <option value="lifepo4">LiFePO4 (0&deg;C Cold Lockout)</option>
+                  <option value="sodium_ion">Sodium-Ion (-20&deg;C Low-Temp)</option>
+                  <option value="agm">Lead-Acid AGM (-20&deg;C 50% DoD)</option>
+                </select>
+              </div>
+
+              <div class="preset-field">
+                <label for="solar-cap-input">CAPACITY (WH)</label>
+                <input
+                  id="solar-cap-input"
+                  type="number"
+                  min="5"
+                  max="500"
+                  step="1"
+                  value="24"
+                  class="brutal-input"
+                />
+              </div>
+            </div>
+
+            <div class="slider-header" style="margin-top: 8px;">
+              <label for="solar-storm-slider">CONSECUTIVE CLOUDY STORM DAYS</label>
+              <span id="solar-storm-readout" class="mono-highlight">5 days</span>
+            </div>
+            <input
+              id="solar-storm-slider"
+              type="range"
+              min="3"
+              max="10"
+              step="1"
+              value="5"
+              class="brutal-slider"
+            />
+
+            <div class="opt-Action-row" style="margin-top: 10px;">
+              <span id="solar-target-label" class="inline-site-badge">Target: Mount Mansfield Summit</span>
+              <button id="run-solar-btn" type="button" class="brutal-btn btn-primary">
+                Run Winter Survival Simulation
+              </button>
+            </div>
+          </div>
+
+          <div id="solar-summary-banner" class="survival-banner survival-banner-survived">
+            Click &ldquo;Run Winter Survival Simulation&rdquo; to model mountaintop cold autonomy.
+          </div>
+
+          <div class="reach-kpi-row" id="solar-kpi-row">
+            <div class="kpi-box">
+              <span class="kpi-label">MIN STATE OF CHARGE</span>
+              <span id="solar-kpi-min-soc" class="kpi-num">-- %</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">BROWNOUT HOURS</span>
+              <span id="solar-kpi-brownout" class="kpi-num">0.0 h</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">TOTAL GENERATION</span>
+              <span id="solar-kpi-gen" class="kpi-num">-- Wh</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">STORM AUTONOMY</span>
+              <span id="solar-kpi-streak" class="kpi-num">-- days</span>
+            </div>
+          </div>
+
+          <div class="card sizing-rec-card" id="solar-sizing-card">
+            <span class="section-kicker">AUTONOMOUS SIZING RECOMMENDATIONS</span>
+            <div class="sizing-rec-content">
+              <div>Recommended Panel: <strong id="solar-rec-panel">-- W</strong></div>
+              <div>Recommended Battery: <strong id="solar-rec-battery">-- Wh</strong></div>
+            </div>
+          </div>
+
+          <div class="table-scroll-wrap" style="max-height: 220px;">
+            <table class="brutal-table" aria-label="Day-by-Day Winter Simulation Timeline">
+              <thead>
+                <tr>
+                  <th>Day</th>
+                  <th>Date</th>
+                  <th>Temp</th>
+                  <th>Cloud</th>
+                  <th>Harvest</th>
+                  <th>End SoC</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="solar-timeline-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TAB 5: WARDRIVE CALIBRATION -->
+        <section id="tab-telemetry" class="tab-panel" role="tabpanel">
+          <div class="panel-intro">
+            <span class="section-kicker">GROUND-TRUTH MESHTASTIC TELEMETRY INGESTION</span>
+            <p class="panel-desc">
+              Ingest field drive-test wardriving packets (CSV / JSON) and calibrate Longley-Rice ITM propagation against
+              actual measured RSSI to derive empirical canopy loss (dB) and clutter attenuation (dB/km).
+            </p>
+          </div>
+
+          <div class="control-strip">
+            <div class="telemetry-bar-controls">
+              <div class="preset-field" style="flex:1;">
+                <label for="wardrive-tx-select">TRANSMITTER HIGH SITE</label>
+                <select id="wardrive-tx-select" class="brutal-select"></select>
+              </div>
+              <button id="load-route15-sample-btn" type="button" class="brutal-btn btn-xs btn-accent">
+                Load Route 15 Sample
+              </button>
+            </div>
+
+            <div style="margin-top: 8px;">
+              <label for="wardrive-log-input" class="sr-only">Raw Log Input</label>
+              <textarea
+                id="wardrive-log-input"
+                class="brutal-textarea"
+                rows="6"
+                placeholder="Paste Meshtastic CSV (time,lat,lon,elevation,snr,rssi,from,to) or JSON wardriving log..."
+              ></textarea>
+            </div>
+
+            <div class="opt-Action-row" style="margin-top: 8px;">
+              <button id="run-calibration-btn" type="button" class="brutal-btn btn-primary">
+                Calibrate Ground-Truth Clutter
+              </button>
+            </div>
+          </div>
+
+          <div id="calibration-summary-banner" class="opt-summary-banner">
+            Paste a wardriving log or click &ldquo;Load Route 15 Sample&rdquo; to begin calibration.
+          </div>
+
+          <div class="reach-kpi-row" id="calib-kpi-row">
+            <div class="kpi-box">
+              <span class="kpi-label">MATCHED PACKETS</span>
+              <span id="calib-kpi-count" class="kpi-num">0</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">MEAN ERROR (BIAS)</span>
+              <span id="calib-kpi-bias" class="kpi-num">-- dB</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">RMSE</span>
+              <span id="calib-kpi-rmse" class="kpi-num">-- dB</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">REC. CANOPY LOSS</span>
+              <span id="calib-kpi-canopy" class="kpi-num">-- dB</span>
+            </div>
+          </div>
+
+          <div class="table-scroll-wrap" style="max-height: 240px;">
+            <table class="brutal-table" aria-label="Field Packet Calibration Matches">
+              <thead>
+                <tr>
+                  <th>Packet</th>
+                  <th id="th-calib-dist">Dist</th>
+                  <th>LOS</th>
+                  <th>Modeled RX</th>
+                  <th>Measured</th>
+                  <th>Residual Error</th>
+                </tr>
+              </thead>
+              <tbody id="calib-matches-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TAB 6: RF ENGINEERING & ROLE ADVISOR (TASK-1052) -->
+        <section id="tab-advisor" class="tab-panel tab-content" role="tabpanel">
+          <div class="panel-intro">
+            <span class="section-kicker">RF ENGINEERING &amp; CONTENTION-AWARE ROLE ADVISOR</span>
+            <p class="panel-desc">
+              Population-conditioned role selection, channel traffic load forecasting (Semtech AN1200.13 &amp; Aloha contention),
+              summit backhaul architecture, and collinear antenna isolation.
+            </p>
+          </div>
+
+          <!-- Role Recommendation Banner & Town-Killer Alert -->
+          <div id="advisor-role-banner" class="role-rec-banner">
+            <div class="role-badge-row">
+              <span class="role-badge-label">RECOMMENDED ROLE:</span>
+              <span id="advisor-role-badge" class="telemetry-badge role-badge-highlight">ROUTER</span>
+              <span id="advisor-site-context" class="mono-highlight">VT-PEAK-01 (Mount Mansfield Summit)</span>
+            </div>
+            <!-- Alert Box for TOWN_KILLER_RISK -->
+            <div id="advisor-town-killer-alert" class="alert-town-killer" style="display: none;">
+              <div class="alert-header">
+                <span class="alert-icon">⚠️</span>
+                <strong>[HAZARD: TOWN_KILLER_RISK DETECTED]</strong>
+              </div>
+              <p id="advisor-risk-message" class="alert-body">
+                Residential low site or high-congestion summit risks network broadcast storm collapse.
+              </p>
+            </div>
+            <div class="role-params-row">
+              <span id="advisor-protocol-tag" class="telemetry-pill">Meshtastic</span>
+              <span id="advisor-preset-tag" class="telemetry-pill">Preset: LongFast</span>
+              <span id="advisor-hop-tag" class="telemetry-pill">Hop Ceiling: 3</span>
+              <span id="advisor-coord-tag" class="telemetry-pill coord-pill" style="display:none;">Coordination Required</span>
+            </div>
+            <div class="cli-command-box">
+              <span class="cli-label">VENDOR CLI COMMAND:</span>
+              <div class="cli-row">
+                <code id="advisor-cli-command" class="cli-snippet">meshtastic --set-owner "VT-PEAK-01" --set-canned "Mount Mansfield"</code>
+                <button type="button" id="copy-advisor-cli-btn" class="brutal-btn btn-xs">Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Channel Utilization Meter Bar -->
+          <div class="card advisor-card">
+            <div class="card-header-row">
+              <span class="section-kicker">CHANNEL UTILIZATION FORECAST (ALOHA CONTENTION)</span>
+              <span class="meta-label">ADOPTION: <span id="advisor-adoption-readout" class="mono-highlight">0.1% (0.001)</span></span>
+            </div>
+            <div class="utilization-meter-wrap">
+              <div class="utilization-meter-header">
+                <span>PROJECTED DUTY CYCLE</span>
+                <span id="utilization-pct-readout" class="mono-highlight">0.0%</span>
+              </div>
+              <div class="utilization-bar-track">
+                <div id="utilization-bar-fill" class="utilization-bar-fill" style="width: 0%;"></div>
+                <div class="utilization-threshold-line" title="25% Firmware Congestion Threshold" style="left: 25%;">
+                  <span class="threshold-label">25% CAP</span>
+                </div>
+              </div>
+              <div class="utilization-legend-row">
+                <span class="legend-note">&lt;15% Clean Mesh</span>
+                <span class="legend-note">15-25% Moderate Load</span>
+                <span class="legend-note text-hazard">&gt;25% Congestion Collapse</span>
+              </div>
+            </div>
+            <div class="reach-kpi-row" style="margin-top: 8px;">
+              <div class="kpi-box">
+                <span class="kpi-label">EXPOSED POPULATION</span>
+                <span id="advisor-kpi-population" class="kpi-num">0</span>
+              </div>
+              <div class="kpi-box">
+                <span class="kpi-label">EXPECTED NODES</span>
+                <span id="advisor-kpi-nodes" class="kpi-num">0</span>
+              </div>
+              <div class="kpi-box">
+                <span class="kpi-label">COLLISION PROB</span>
+                <span id="advisor-kpi-collision" class="kpi-num">0.0%</span>
+              </div>
+              <div class="kpi-box">
+                <span class="kpi-label">AIRTIME / HR</span>
+                <span id="advisor-kpi-airtime" class="kpi-num">0 s</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Summit Backhaul Blueprint Selector -->
+          <div class="card advisor-card">
+            <div class="card-header-row">
+              <span class="section-kicker">SUMMIT BACKHAUL BLUEPRINT</span>
+              <span id="backhaul-arch-badge" class="telemetry-badge">DIRECT LORA</span>
+            </div>
+            <div class="blueprint-selector-row">
+              <button type="button" class="brutal-btn btn-xs bp-select-btn active" data-arch="direct_lora">
+                Direct LoRa
+              </button>
+              <button type="button" class="brutal-btn btn-xs bp-select-btn" data-arch="dual_radio_pi_bridge">
+                Dual-Radio Pi Bridge
+              </button>
+              <button type="button" class="brutal-btn btn-xs bp-select-btn" data-arch="microwave_ip_5_8ghz">
+                5.8 GHz IP Microwave
+              </button>
+            </div>
+            <div id="backhaul-blueprint-details" class="blueprint-details-body">
+              <div id="backhaul-blueprint-desc" class="blueprint-desc">
+                Single radio shared LoRa channel. Suitable for low-traffic summits with &lt;15% channel utilization.
+              </div>
+              <div class="blueprint-specs-grid">
+                <div><strong>Band Split:</strong> <span id="bp-band-split">Shared 915 MHz</span></div>
+                <div><strong>Required Isolation:</strong> <span id="bp-rf-isolation">N/A</span></div>
+                <div><strong>Vertical Separation:</strong> <span id="bp-vert-sep">N/A</span></div>
+              </div>
+              <div id="bp-bom-list" class="blueprint-bom"></div>
+            </div>
+          </div>
+
+          <!-- Collinear Antenna Separation Calculator -->
+          <div class="card advisor-card">
+            <div class="card-header-row">
+              <span class="section-kicker">COLLINEAR ANTENNA SEPARATION CALCULATOR</span>
+              <span class="meta-label">DESENSE MITIGATION</span>
+            </div>
+            <div class="isolation-calc-grid">
+              <div class="preset-field">
+                <label for="antenna-sep-input">VERTICAL SEPARATION (METERS)</label>
+                <input
+                  id="antenna-sep-input"
+                  type="number"
+                  min="0.1"
+                  max="50.0"
+                  step="0.1"
+                  value="2.5"
+                  class="brutal-input"
+                />
+              </div>
+              <div class="preset-field">
+                <label for="antenna-freq-select">FREQUENCY BAND</label>
+                <select id="antenna-freq-select" class="brutal-select">
+                  <option value="915.0" selected>915 MHz (US915, &lambda;=0.328m)</option>
+                  <option value="433.0">433 MHz (US433, &lambda;=0.692m)</option>
+                  <option value="868.0">868 MHz (EU868, &lambda;=0.345m)</option>
+                </select>
+              </div>
+            </div>
+            <div class="isolation-readout-row">
+              <div class="isolation-kpi">
+                <span class="kpi-label">CALCULATED ISOLATION</span>
+                <span id="antenna-isolation-val" class="isolation-number">59.4 dB</span>
+              </div>
+              <div class="isolation-status-box">
+                <span id="isolation-status-badge" class="telemetry-badge margin-positive">EXCELLENT ISOLATION</span>
+                <span id="isolation-status-desc" class="isolation-desc">Sufficient to prevent co-channel LNA front-end desense (&gt;40 dB threshold).</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 1-Click Multi-Protocol Provisioning Button -->
+          <div class="opt-Action-row" style="margin-top: 10px;">
+            <button id="open-provisioning-btn" type="button" class="brutal-btn btn-primary" style="width: 100%;">
+              Open Multi-Protocol Provisioning
+            </button>
+          </div>
+        </section>
+
+        <!-- TAB 7: MESHTASTIC MQTT & UNOBSERVED GAPS (TASK-1052) -->
+        <section id="tab-mqtt" class="tab-panel tab-content" role="tabpanel">
+          <div class="panel-intro">
+            <span class="section-kicker">OFFLINE-SAFE MESHTASTIC MQTT &amp; UNOBSERVED AREA ANALYSIS</span>
+            <p class="panel-desc">
+              Ingests Meshtastic MQTT packets (JSON / NDJSON) and maps population centers lacking observed telemetry.
+              Avoids false &ldquo;uncovered&rdquo; assumptions &mdash; flags gaps as unobserved and recommends high-site candidate bridges.
+            </p>
+          </div>
+
+          <div class="control-strip">
+            <div class="mqtt-controls-row">
+              <label class="fixture-toggle-label" title="Replay bundled synthetic Vermont packet stream (fixtures/vt_mqtt_live_sample.json)">
+                <input type="checkbox" id="mqtt-fixture-toggle" checked />
+                <span>Use Synthetic Replay Fixture</span>
+              </label>
+              <span id="mqtt-synthetic-badge" class="telemetry-badge badge-synthetic">[SYNTHETIC DATA]</span>
+            </div>
+            <div class="opt-Action-row" style="margin-top: 8px;">
+              <button id="run-mqtt-analysis-btn" type="button" class="brutal-btn btn-primary">
+                Run Unobserved Area Analysis
+              </button>
+            </div>
+          </div>
+
+          <div id="mqtt-summary-banner" class="opt-summary-banner">
+            Click &ldquo;Run Unobserved Area Analysis&rdquo; to assess municipal telemetry gaps.
+          </div>
+
+          <div class="reach-kpi-row" id="mqtt-kpi-row">
+            <div class="kpi-box">
+              <span class="kpi-label">TOWNS CHECKED</span>
+              <span id="mqtt-kpi-total" class="kpi-num">0</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">OBSERVED TOWNS</span>
+              <span id="mqtt-kpi-observed" class="kpi-num">0</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">UNOBSERVED GAPS</span>
+              <span id="mqtt-kpi-unobserved" class="kpi-num">0</span>
+            </div>
+            <div class="kpi-box">
+              <span class="kpi-label">HEARD NODES</span>
+              <span id="mqtt-kpi-heard" class="kpi-num">0</span>
+            </div>
+          </div>
+
+          <div class="table-scroll-wrap" style="max-height: 280px;">
+            <table class="brutal-table" id="mqtt-gaps-table" aria-label="Unobserved Municipal Population Centers and Candidate Bridge Sites">
+              <thead>
+                <tr>
+                  <th>Town / Municipality</th>
+                  <th>County</th>
+                  <th>Pop (2020)</th>
+                  <th id="th-gaps-dist">Nearest Heard Node</th>
+                  <th>Recommended Repeater Bridge Sites</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="mqtt-gaps-tbody">
+                <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No analysis run yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TAB 8: REGIONAL DATA PACKS (TASK-1137) -->
+        <section id="tab-packs" class="tab-panel tab-content" role="tabpanel">
+          <div class="panel-intro">
+            <span class="section-kicker">OFFLINE REGIONAL INFRASTRUCTURE PACKS</span>
+            <p class="panel-desc">
+              Manage offline regional tower and municipal infrastructure datasets.
+              Install verified data packs to illuminate local towers and carrier infrastructure.
+            </p>
+          </div>
+
+          <div class="control-strip">
+            <div class="opt-Action-row">
+              <button id="refresh-packs-btn" type="button" class="brutal-btn btn-sm btn-primary">
+                ↻ Refresh Packs
+              </button>
+            </div>
+          </div>
+
+          <div id="packs-status-banner" class="opt-summary-banner" style="display: none; margin-top: 8px;"></div>
+
+          <div class="regional-packs-section" style="margin-top: 12px;">
+            <h4 class="subgroup-title" style="margin: 12px 0 6px 0; font-size: 11px; letter-spacing: 0.05em; color: var(--accent-cyan);">INSTALLED REGIONAL PACKS</h4>
+            <div id="installed-packs-list" class="packs-list">
+              <div class="mono-highlight" style="font-size: 11px; color: var(--text-muted);">Loading installed packs...</div>
+            </div>
+
+            <h4 class="subgroup-title" style="margin: 16px 0 6px 0; font-size: 11px; letter-spacing: 0.05em; color: var(--accent-cyan);">AVAILABLE REGIONAL PACKS</h4>
+            <div id="available-packs-list" class="packs-list">
+              <div class="mono-highlight" style="font-size: 11px; color: var(--text-muted);">Loading available packs...</div>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Custom Site Pinning Modal (TASK-1042) -->
+  <div id="custom-site-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="custom-site-title">
+    <div class="modal-card brutal-card" style="max-width: 520px; width: 92%;">
+      <div class="modal-header">
+        <h3 id="custom-site-title" class="modal-title">📌 Pin Custom Mesh Node</h3>
+        <button id="close-custom-site-modal-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+      </div>
+      <form id="custom-site-form" class="modal-body custom-site-form">
+        <div class="form-row">
+          <label for="custom-site-name" class="brutal-label">Site Name / Host</label>
+          <input id="custom-site-name" type="text" class="brutal-input" placeholder="e.g. Underhill Silo or Mountain Cabin" required />
+        </div>
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="custom-site-lat" class="brutal-label">Latitude (&deg;N)</label>
+            <input id="custom-site-lat" type="number" step="0.0001" class="brutal-input" placeholder="44.4759" required />
+          </div>
+          <div>
+            <label for="custom-site-lon" class="brutal-label">Longitude (&deg;W)</label>
+            <input id="custom-site-lon" type="number" step="0.0001" class="brutal-input" placeholder="-73.2121" required />
+          </div>
+        </div>
+        <div class="form-tip">Tip: Double-click anywhere on the map to pre-fill coordinates.</div>
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="custom-site-elev" class="brutal-label">Elevation (m ASL)</label>
+            <input id="custom-site-elev" type="number" step="0.5" class="brutal-input" placeholder="Auto-estimated if blank" />
+          </div>
+          <div>
+            <label for="custom-site-mast" class="brutal-label">Mast / AGL Height (m)</label>
+            <input id="custom-site-mast" type="number" step="0.5" class="brutal-input" value="10.0" required />
+          </div>
+        </div>
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="custom-site-type" class="brutal-label">Site Structure Type</label>
+            <select id="custom-site-type" class="brutal-select">
+              <option value="silo">Farm Silo</option>
+              <option value="water_tower">Water Tower</option>
+              <option value="communications_tower">Comm Tower</option>
+              <option value="mountain_peak">Mountain Peak</option>
+              <option value="fire_lookout">Fire Lookout</option>
+              <option value="building_rooftop" selected>Building Rooftop</option>
+              <option value="custom">Custom Mast</option>
+            </select>
+          </div>
+          <div>
+            <label for="custom-site-preset" class="brutal-label">Hardware Preset</label>
+            <select id="custom-site-preset" class="brutal-select">
+              <option value="RAK4631_SOLAR">RAK4631 Solar</option>
+              <option value="STATION_G2_BACKBONE">Station G2</option>
+              <option value="HELTEC_V3_HOME">Heltec V3</option>
+              <option value="SENSECAP_T1000E">SenseCAP T1000-E</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="custom-site-notes" class="brutal-label">Operator Notes / Access</label>
+          <input id="custom-site-notes" type="text" class="brutal-input" placeholder="e.g. Non-penetrating rooftop clamp, 10W panel" />
+        </div>
+        <div class="modal-actions" style="margin-top: 14px; display: flex; justify-content: flex-end; gap: 8px;">
+          <button id="cancel-custom-site-btn" type="button" class="brutal-btn btn-xs">Cancel</button>
+          <button id="submit-custom-site-btn" type="submit" class="brutal-btn btn-xs btn-accent">Save Node to Registry</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- COMMUNITY SITE PROPOSAL MODAL (TASK-1065) -->
+  <div id="proposal-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="proposal-title">
+    <div class="modal-card brutal-card" style="max-width: 540px; width: 92%;">
+      <div class="modal-header">
+        <h3 id="proposal-title" class="modal-title">➕ Propose Community Research Site</h3>
+        <button id="close-proposal-modal-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+      </div>
+      <form id="proposal-form" class="modal-body custom-site-form">
+        <div class="form-row">
+          <label for="proposal-name" class="brutal-label">Site / Research Tower Name</label>
+          <input id="proposal-name" type="text" class="brutal-input" placeholder="e.g. Jericho Hill Tower or UVM Research Mast" required />
+        </div>
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="proposal-lat" class="brutal-label">Latitude (&deg;N)</label>
+            <input id="proposal-lat" type="number" step="0.0001" class="brutal-input" placeholder="44.4759" required />
+          </div>
+          <div>
+            <label for="proposal-lon" class="brutal-label">Longitude (&deg;W)</label>
+            <input id="proposal-lon" type="number" step="0.0001" class="brutal-input" placeholder="-73.2121" required />
+          </div>
+        </div>
+        <div class="form-tip">Tip: Double-click anywhere on the map or type coordinates.</div>
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="proposal-elev" class="brutal-label">Elevation (m ASL)</label>
+            <input id="proposal-elev" type="number" step="0.5" class="brutal-input" placeholder="Auto-estimated if blank" />
+          </div>
+          <div>
+            <label for="proposal-height" class="brutal-label">Mast / AGL Height (m)</label>
+            <input id="proposal-height" type="number" step="0.5" class="brutal-input" value="10.0" required />
+          </div>
+        </div>
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="proposal-site-type" class="brutal-label">Structure Type</label>
+            <select id="proposal-site-type" class="brutal-select">
+              <option value="research_tower" selected>Research Tower</option>
+              <option value="communications_tower">Communications Tower</option>
+              <option value="mountain_peak">Mountain Peak</option>
+              <option value="water_tower">Water Tower</option>
+              <option value="silo">Farm Silo</option>
+              <option value="fire_lookout">Fire Lookout</option>
+              <option value="building_rooftop">Building Rooftop</option>
+              <option value="custom">Custom Mast</option>
+            </select>
+          </div>
+          <div>
+            <label for="proposal-owner" class="brutal-label">Owner / Group</label>
+            <input id="proposal-owner" type="text" class="brutal-input" value="Community" placeholder="e.g. VT Mesh Group" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="proposal-url" class="brutal-label">Source URL (FCC / Community / Research link)</label>
+          <input id="proposal-url" type="url" class="brutal-input" placeholder="https://wireless2.fcc.gov/... or https://..." />
+        </div>
+        <div class="form-row">
+          <label for="proposal-notes" class="brutal-label">Proposal Notes / Justification</label>
+          <input id="proposal-notes" type="text" class="brutal-input" placeholder="e.g. High ridge with solar potential and clear Champlain viewshed" />
+        </div>
+        <div id="proposal-error" class="mono-highlight" style="color: var(--accent-danger); font-size: 11px; margin-top: 6px; display: none;"></div>
+        <div class="modal-actions" style="margin-top: 14px; display: flex; justify-content: flex-end; gap: 8px;">
+          <button id="cancel-proposal-btn" type="button" class="brutal-btn btn-xs">Cancel</button>
+          <button id="submit-proposal-btn" type="submit" class="brutal-btn btn-xs btn-accent">Submit Proposal</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- IMPORT COMMUNITY PACK MODAL (TASK-1065) -->
+  <div id="import-pack-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="import-pack-title">
+    <div class="modal-card brutal-card" style="max-width: 580px; width: 92%;">
+      <div class="modal-header">
+        <h3 id="import-pack-title" class="modal-title">📥 Import Community Pack Snapshot</h3>
+        <button id="close-import-pack-modal-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+      </div>
+      <form id="import-pack-form" class="modal-body custom-site-form">
+        <div class="panel-desc" style="margin-bottom: 10px; font-size: 11px; color: var(--text-secondary);">
+          Import a community mesh pack snapshot JSON. Maximum 500 nodes allowed per pack. URLs must use HTTP/HTTPS.
+        </div>
+        <div class="form-row">
+          <label for="import-pack-file" class="brutal-label">Upload JSON File</label>
+          <input id="import-pack-file" type="file" accept=".json,application/json" class="brutal-input" />
+        </div>
+        <div class="form-row">
+          <label for="import-pack-json" class="brutal-label">Or Paste Snapshot JSON</label>
+          <textarea id="import-pack-json" class="brutal-textarea" rows="7" placeholder='{"nodes": [...]}'></textarea>
+        </div>
+        <div id="import-pack-error" class="mono-highlight" style="color: var(--accent-danger); font-size: 11px; margin-top: 6px; display: none;"></div>
+        <div id="import-pack-success" class="mono-highlight" style="color: var(--accent-emerald); font-size: 11px; margin-top: 6px; display: none;"></div>
+        <div class="modal-actions" style="margin-top: 14px; display: flex; justify-content: flex-end; gap: 8px;">
+          <button id="cancel-import-pack-btn" type="button" class="brutal-btn btn-xs">Cancel</button>
+          <button id="submit-import-pack-btn" type="submit" class="brutal-btn btn-xs btn-accent">Import Snapshot</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MULTI-PROTOCOL PROVISIONING MODAL (TASK-1052) -->
+  <div id="provisioning-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="prov-modal-title">
+    <div class="modal-card brutal-card prov-modal-card" style="max-width: 680px; width: 94%;">
+      <div class="modal-header">
+        <h3 id="prov-modal-title" class="modal-title">📡 Multi-Protocol Node Provisioning</h3>
+        <button id="close-provisioning-modal-btn" type="button" class="btn-close" aria-label="Close modal">[X]</button>
+      </div>
+      <div class="modal-body prov-modal-body">
+        <div class="prov-site-header">
+          <span class="site-tag" id="prov-site-id">VT-PEAK-01</span>
+          <strong id="prov-site-name">Mount Mansfield Summit</strong>
+          <span id="prov-site-params" class="mono-highlight">915.0 MHz | SF11 | BW 250 kHz</span>
+        </div>
+
+        <div class="protocol-selector-strip" role="group" aria-label="Provisioning Protocol Target">
+          <span class="meta-label">TARGET PROTOCOL:</span>
+          <div class="proto-buttons-wrap">
+            <button type="button" class="brutal-btn btn-xs proto-target-btn active" data-protocol="meshtastic">
+              [ Meshtastic ]
+            </button>
+            <button type="button" class="brutal-btn btn-xs proto-target-btn" data-protocol="meshcore">
+              [ MeshCore ]
+            </button>
+            <button type="button" class="brutal-btn btn-xs proto-target-btn" data-protocol="reticulum">
+              [ Reticulum ]
+            </button>
+          </div>
+        </div>
+
+        <div class="prov-content-grid">
+          <div class="qr-col">
+            <div id="prov-qr-svg" class="prov-qr-container" title="Scannable QR Code"></div>
+            <div id="prov-qr-label" class="prov-qr-caption">Scan with Meshtastic App or Camera</div>
+          </div>
+          <div class="cli-col">
+            <label for="prov-raw-content" class="brutal-label" id="prov-raw-label">SHAREABLE URL / CLI / CONFIG STANZA</label>
+            <textarea id="prov-raw-content" class="brutal-textarea prov-raw-box" readonly rows="7"></textarea>
+            <div class="prov-action-bar">
+              <button id="prov-copy-btn" type="button" class="brutal-btn btn-primary btn-sm">
+                📋 Copy to Clipboard
+              </button>
+              <span id="prov-copy-status" class="mono-highlight"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TACTICAL AD-HOC PIN MODAL / CARD (TASK-1106) -->
+  <div id="tactical-pin-card" class="modal hidden modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tactical-pin-title">
+    <div class="modal-card brutal-card" style="max-width: 480px; width: 92%;">
+      <div class="modal-header">
+        <h3 id="tactical-pin-title" class="modal-title">TACTICAL AD-HOC PIN // COMMUNITY LOCATION</h3>
+        <button id="pin-header-close-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="modal-body custom-site-form">
+        <div class="panel-desc" style="margin-bottom: 10px; font-size: 11px; color: var(--text-secondary);">
+          Drop ad-hoc tactical pin on map (barn, house on hill, church steeple, silo) to simulate coverage and backhaul reach.
+        </div>
+        <div class="form-row">
+          <label for="pin-name" class="brutal-label">Location / Landmark Name</label>
+          <input id="pin-name" type="text" class="brutal-input" placeholder="e.g. Lincoln Hill Barn" />
+        </div>
+        <div class="form-row form-grid-2">
+          <div>
+            <span class="brutal-label">Coordinates</span>
+            <div id="pin-coords" class="mono-telemetry-box" style="padding: 6px; background: var(--bg-input); border: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; color: var(--accent-emerald);">--</div>
+          </div>
+          <div>
+            <span class="brutal-label">Terrain Elevation</span>
+            <div id="pin-elevation" class="mono-telemetry-box" style="padding: 6px; background: var(--bg-input); border: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; color: var(--accent-emerald);">-- m ASL</div>
+          </div>
+        </div>
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="pin-mast-height" class="brutal-label">Mast Height (m AGL)</label>
+            <input id="pin-mast-height" type="number" class="brutal-input" min="1" max="150" value="10" step="1" />
+          </div>
+          <div>
+            <label for="pin-site-type" class="brutal-label">Site / Structure Type</label>
+            <select id="pin-site-type" class="brutal-select">
+              <option value="building_rooftop" selected>Building Rooftop</option>
+              <option value="silo">Agricultural Silo</option>
+              <option value="water_tower">Water Tower</option>
+              <option value="mountain_peak">Mountain Summit</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="fuzz-toggle" style="margin-bottom: 0;">
+            <input id="pin-include-whatif" type="checkbox" checked />
+            <span>Include in What-If Coverage Scenario</span>
+          </label>
+        </div>
+        <div class="modal-actions" style="margin-top: 14px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;">
+          <button id="pin-remove-btn" type="button" class="brutal-btn btn-xs btn-danger">✖ Remove Pin</button>
+          <button id="pin-simulate-btn" type="button" class="brutal-btn btn-xs btn-accent">⚡ Update What-If</button>
+          <button id="pin-save-btn" type="button" class="brutal-btn btn-xs btn-primary">💾 Save to Registry</button>
+          <button id="pin-landowner-brief-btn" type="button" class="brutal-btn btn-xs">[📄 Landowner Brief]</button>
+          <button id="pin-solar-sizing-btn" type="button" class="brutal-btn btn-xs">[☀️ Solar Sizing]</button>
+          <button id="pin-close-btn" type="button" class="brutal-btn btn-xs">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FIELD KIT USB PROVISIONER MODAL (TASK-1089) -->
+  <div id="fieldkit-modal" class="modal hidden modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="fieldkit-modal-title">
+    <div class="modal-card brutal-card" style="max-width: 580px; width: 92%;">
+      <div class="modal-header">
+        <h3 id="fieldkit-modal-title" class="modal-title">STAGE OFFLINE FIELD KIT // USB PROVISIONER</h3>
+        <button id="fieldkit-modal-header-close-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+      </div>
+      <form id="fieldkit-form" class="modal-body custom-site-form" onsubmit="return false;">
+        <div class="panel-desc" style="margin-bottom: 10px; font-size: 11px; color: var(--text-secondary);">
+          Provision a standalone, self-contained offline deployment kit to a removable USB flash drive or local directory. Includes launchers, regional tiles, and elevation models.
+        </div>
+
+        <div class="form-row">
+          <label for="fieldkit-drive-select" class="brutal-label">Target Drive / Destination</label>
+          <select id="fieldkit-drive-select" class="brutal-select">
+            <option value="">Detecting drives...</option>
+            <option value="__custom__">Manual Directory Path...</option>
+          </select>
+        </div>
+
+        <div class="form-row" id="fieldkit-custom-path-row" style="display: none;">
+          <label for="fieldkit-custom-path" class="brutal-label">Manual Directory Path</label>
+          <input id="fieldkit-custom-path" type="text" class="brutal-input" placeholder="e.g. E:\MeshScout-Field-Kit" style="display: none;" />
+        </div>
+
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="fieldkit-state-select" class="brutal-label">State / Region</label>
+            <select id="fieldkit-state-select" class="brutal-select">
+              <option value="VT" selected>VT - Vermont</option>
+              <option value="NH">NH - New Hampshire</option>
+              <option value="NY">NY - New York</option>
+              <option value="ME">ME - Maine</option>
+              <option value="CA_QC">CA_QC - Quebec</option>
+            </select>
+          </div>
+          <div>
+            <label for="fieldkit-buffer" class="brutal-label">Border Buffer (km)</label>
+            <input id="fieldkit-buffer" type="number" class="brutal-input" min="0" max="100" value="20" step="1" />
+          </div>
+        </div>
+
+        <div class="form-row form-grid-2">
+          <div>
+            <label for="fieldkit-zoom" class="brutal-label">Cartography Zoom Levels</label>
+            <select id="fieldkit-zoom" class="brutal-select">
+              <option value="basic" selected>Basic Nav (Z7-Z12)</option>
+              <option value="full">Full Tactical (Z7-Z14)</option>
+            </select>
+          </div>
+          <div style="display: flex; align-items: flex-end; padding-bottom: 6px;">
+            <label class="fuzz-toggle" style="margin-bottom: 0;">
+              <input id="fieldkit-dem" type="checkbox" checked />
+              <span>Include Digital Elevation (DEM)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-actions" style="margin-top: 14px; display: flex; justify-content: flex-end; gap: 8px;">
+          <button id="fieldkit-calc-btn" type="button" class="brutal-btn btn-xs">Calculate Size</button>
+          <button id="fieldkit-stage-btn" type="button" class="brutal-btn btn-xs btn-accent">⚡ Stage Field Kit</button>
+          <button id="fieldkit-close-btn" type="button" class="brutal-btn btn-xs">Cancel</button>
+        </div>
+
+        <div id="fieldkit-log" class="mono-highlight" style="margin-top: 12px; font-size: 11px; white-space: pre-wrap; max-height: 180px; overflow-y: auto; display: none;"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- CIVIC TOWER / INFRASTRUCTURE DETAIL MODAL (TASK-1095) -->
+  <div id="tower-info-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tower-info-title">
+    <div class="modal-card brutal-card" style="max-width: 520px; width: 92%;">
+      <div class="modal-header">
+        <h3 id="tower-info-title" class="modal-title">🗼 Civic High-Site Infrastructure</h3>
+        <button id="close-tower-info-modal-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+      </div>
+      <div id="tower-info-body" class="modal-body tower-info-body">
+        <!-- Injected dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- TELEMETRY NODE DETAIL MODAL (TASK-1101) -->
+  <div id="telemetry-node-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="telemetry-node-title">
+    <div class="modal-card brutal-card" style="max-width: 520px; width: 92%;">
+      <div class="modal-header">
+        <h3 id="telemetry-node-title" class="modal-title">📡 Live Mesh Telemetry Node</h3>
+        <button id="close-telemetry-node-modal-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+      </div>
+      <div id="telemetry-node-body" class="modal-body telemetry-node-body">
+        <!-- Injected dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- LANDOWNER HOST BRIEF & EQUIPMENT MOU MODAL (TASK-1119) -->
+  <div id="landowner-dossier-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="landowner-dossier-title">
+    <div class="modal-card brutal-card" style="max-width: 780px; width: 94%;">
+      <div class="modal-header">
+        <h3 id="landowner-dossier-title" class="modal-title">[📄 LANDOWNER HOST BRIEF & EQUIPMENT MOU]</h3>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button id="print-landowner-brief-btn" type="button" class="brutal-btn btn-xs btn-accent">[🖨️ Print / Save PDF]</button>
+          <button id="close-landowner-modal-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+        </div>
+      </div>
+      <div id="landowner-dossier-body" class="modal-body landowner-dossier-body">
+        <!-- Injected dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- WINTER SOLAR & BATTERY AUTONOMY CALCULATOR MODAL (TASK-1119) -->
+  <div id="solar-autonomy-modal" class="modal-backdrop" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="solar-autonomy-title">
+    <div class="modal-card brutal-card" style="max-width: 820px; width: 94%;">
+      <div class="modal-header">
+        <h3 id="solar-autonomy-title" class="modal-title">[☀️ WINTER SOLAR & BATTERY AUTONOMY CALCULATOR]</h3>
+        <button id="close-solar-modal-btn" type="button" class="btn-close" aria-label="Close modal">&times;</button>
+      </div>
+      <div id="solar-autonomy-body" class="modal-body solar-autonomy-body">
+        <!-- Injected dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- INTERACTIVE GUIDED TUTORIAL WALKTHROUGH OVERLAY -->
+  <div id="tutorial-overlay" class="tutorial-overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="tutorial-step-title">
+    <div class="tutorial-backdrop" id="tutorial-backdrop"></div>
+    <div id="tutorial-spotlight-box" class="tutorial-spotlight-box" style="display: none;"></div>
+    <div class="tutorial-card pos-center" id="tutorial-card">
+      <div class="tutorial-header">
+        <div class="tutorial-meta">
+          <span class="tutorial-badge">TUTORIAL // UI GUIDE</span>
+          <span id="tutorial-step-counter" class="tutorial-step-counter">STEP 1 OF 8</span>
+        </div>
+        <button id="tutorial-close-btn" type="button" class="tutorial-close-btn" aria-label="Close tutorial">
+          [X]
+        </button>
+      </div>
+
+      <div class="tutorial-progress-bar" role="progressbar" aria-valuenow="1" aria-valuemin="1" aria-valuemax="8">
+        <div id="tutorial-progress-fill" class="tutorial-progress-fill" style="width: 12.5%;"></div>
+      </div>
+
+      <div class="tutorial-body">
+        <div id="tutorial-target-indicator" class="tutorial-target-indicator">SYSTEM OVERVIEW // COMMUNITY RF MESH</div>
+        <h3 id="tutorial-step-title" class="tutorial-title">Welcome to MeshScout</h3>
+        <div id="tutorial-step-content" class="tutorial-content"></div>
+      </div>
+
+      <div class="tutorial-footer">
+        <label class="tutorial-checkbox-label" title="Do not automatically show on future page visits">
+          <input id="tutorial-dont-show-checkbox" type="checkbox" checked />
+          <span>Don't show again on startup</span>
+        </label>
+        <div class="tutorial-actions">
+          <button id="tutorial-skip-btn" type="button" class="brutal-btn btn-xs">Skip Tutorial</button>
+          <button id="tutorial-prev-btn" type="button" class="brutal-btn btn-xs" disabled>&larr; Back</button>
+          <button id="tutorial-next-btn" type="button" class="brutal-btn btn-xs btn-primary">Next &rarr;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Optional Leaflet JS (falls back cleanly to built-in SVG Geodetic Map if offline) -->
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

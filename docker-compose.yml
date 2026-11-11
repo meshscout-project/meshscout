@@ -1,0 +1,24 @@
+services:
+  meshscout:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: meshscout:latest
+    container_name: meshscout
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MESHSCOUT_HOSTED_MODE=1
+      - MESHSCOUT_CLUB_TOKEN=${MESHSCOUT_CLUB_TOKEN:-}
+      - MESHSCOUT_DEM_DIR=/dem
+      - MESHSCOUT_CACHE_DIR=/data/cache
+    volumes:
+      - meshscout-data:/data
+      - meshscout-dem:/dem
+
+volumes:
+  meshscout-data:
+    driver: local
+  meshscout-dem:
+    driver: local

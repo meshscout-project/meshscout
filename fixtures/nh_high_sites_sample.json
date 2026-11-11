@@ -1,0 +1,110 @@
+[
+  {
+    "site_id": "NH-COOS-WASH-01",
+    "name": "Mount Washington Summit",
+    "county": "Coos",
+    "location": {
+      "lat": 44.2705,
+      "lon": -71.3033,
+      "elevation_m": 1917.0
+    },
+    "site_type": "mountain_summit",
+    "mast_height_m": 20.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "source_url": "https://www.mountwashington.org",
+    "notes": "Highest peak in Northeastern US | Severe alpine weather | Auto Road access"
+  },
+  {
+    "site_id": "NH-GRAF-CANN-01",
+    "name": "Cannon Mountain Tramway Summit",
+    "county": "Grafton",
+    "location": {
+      "lat": 44.1567,
+      "lon": -71.6983,
+      "elevation_m": 1243.0
+    },
+    "site_type": "mountain_summit",
+    "mast_height_m": 15.0,
+    "access_difficulty": "moderate",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://www.cannonmt.com",
+    "notes": "Franconia Notch high site overlooking I-93 corridor"
+  },
+  {
+    "site_id": "NH-MERR-KEAR-01",
+    "name": "Mount Kearsarge Fire Tower Summit",
+    "county": "Merrimack",
+    "location": {
+      "lat": 43.3831,
+      "lon": -71.8686,
+      "elevation_m": 895.0
+    },
+    "site_type": "fire_lookout",
+    "mast_height_m": 15.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://www.nhstateparks.org/find-parks-trails/rollins-state-park",
+    "notes": "Central NH regional high point overlooking Lake Sunapee and I-89"
+  },
+  {
+    "site_id": "NH-CHES-MONA-01",
+    "name": "Mount Monadnock Summit",
+    "county": "Cheshire",
+    "location": {
+      "lat": 42.8614,
+      "lon": -72.1081,
+      "elevation_m": 965.0
+    },
+    "site_type": "mountain_summit",
+    "mast_height_m": 10.0,
+    "access_difficulty": "hike_in",
+    "has_grid_power": false,
+    "solar_exposure_pct": 95.0,
+    "is_public_land": true,
+    "source_url": "https://www.nhstateparks.org/find-parks-trails/monadnock-state-park",
+    "notes": "Isolated monadnock summit with broad viewshed into VT and MA"
+  },
+  {
+    "site_id": "NH-BELK-GUNS-01",
+    "name": "Gunstock Mountain Communications Peak",
+    "county": "Belknap",
+    "location": {
+      "lat": 43.5358,
+      "lon": -71.3703,
+      "elevation_m": 683.0
+    },
+    "site_type": "communications_tower",
+    "mast_height_m": 18.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://www.gunstock.com",
+    "notes": "Lakes Region high site overlooking Lake Winnipesaukee"
+  },
+  {
+    "site_id": "NH-GRAF-MOOS-01",
+    "name": "Moose Mountain Ridge",
+    "county": "Grafton",
+    "location": {
+      "lat": 43.7222,
+      "lon": -72.1833,
+      "elevation_m": 700.0
+    },
+    "site_type": "communications_tower",
+    "mast_height_m": 15.0,
+    "access_difficulty": "drive_up",
+    "has_grid_power": true,
+    "solar_exposure_pct": 90.0,
+    "is_public_land": true,
+    "source_url": "https://www.dartmouth.edu",
+    "notes": "Upper Connecticut River Valley backbone tower facing White River Jct and Norwich VT"
+  }
+]

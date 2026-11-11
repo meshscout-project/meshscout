@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meshscout"
+version = "0.14.0"
+description = "Offline-first high-site and topology planning engine for LoRa/MeshCore disaster networks"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [
+    { name = "MeshScout Team" }
+]
+keywords = ["meshcore", "meshtastic", "lora", "rf-planning", "disaster-response", "topography"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Ham Radio",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = [
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.24.0",
+    "segno>=1.6.0",
+]
+
+[project.scripts]
+meshscout = "meshscout.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"meshscout" = ["data/*.json", "data/packs/*"]
+"meshscout.web" = ["static/*", "static/vendor/leaflet/*", "static/vendor/leaflet/images/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

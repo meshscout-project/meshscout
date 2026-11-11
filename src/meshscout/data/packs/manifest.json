@@ -1,0 +1,53 @@
+{
+  "manifest_version": "1.0.0",
+  "generated_at": "2026-11-10T22:50:20.009423+00:00",
+  "packs": {
+    "towers-vt": {
+      "pack_id": "towers-vt",
+      "region_code": "VT",
+      "pack_version": "1.0.0",
+      "schema_version": 2,
+      "row_count": 53,
+      "sha256": "c10126e366699d4f66c0f93cdb16be1a84391c54c341d0e75e27338a2f48d70b",
+      "size_bytes": 7680,
+      "url": null,
+      "sources": [
+        {
+          "dataset": "fcc_asr",
+          "license": "Public Domain",
+          "attribution": "Federal Communications Commission (FCC)",
+          "retrieved_at": "",
+          "source_url": "https://data.fcc.gov/download/pub/uls/complete/r_tower.zip"
+        },
+        {
+          "dataset": "ised_sms",
+          "license": "Open Government Licence - Canada",
+          "attribution": "Innovation, Science and Economic Development Canada (ISED)",
+          "retrieved_at": "",
+          "source_url": "https://www.ic.gc.ca/engineering/SMS_TAFL_Files/TAFL_LTAF.zip"
+        }
+      ],
+      "required_hgt_tiles": []
+    },
+    "towers-vt-civic-osm": {
+      "pack_id": "towers-vt-civic-osm",
+      "region_code": "VT",
+      "pack_version": "1.0.0",
+      "schema_version": 2,
+      "row_count": 5,
+      "sha256": "b1c39d95e5fe13a400617af603d5ab18fc84863f41b26aab08996074711e6823",
+      "size_bytes": 2145,
+      "url": null,
+      "sources": [
+        {
+          "dataset": "civic_osm",
+          "license": "ODbL 1.0",
+          "attribution": "© OpenStreetMap contributors (ODbL 1.0)",
+          "retrieved_at": "",
+          "source_url": "https://overpass-api.de/api/interpreter"
+        }
+      ],
+      "required_hgt_tiles": []
+    }
+  }
+}

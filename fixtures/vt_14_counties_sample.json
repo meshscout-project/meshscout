@@ -1,0 +1,823 @@
+{
+  "description": "Verified high-site candidate towers, municipal water tanks, and summits across all 14 Vermont counties",
+  "counties_count": 14,
+  "sites": [
+    {
+      "site_id": "VT-ADD-01",
+      "name": "Snake Mountain",
+      "county": "Addison",
+      "location": {
+        "lat": 44.0628,
+        "lon": -73.2847,
+        "elevation_m": 392.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 10.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Prominent summit overlooking Champlain Valley. Wildlife management area."
+    },
+    {
+      "site_id": "VT-ADD-02",
+      "name": "Middlebury Water Tank",
+      "county": "Addison",
+      "location": {
+        "lat": 44.0150,
+        "lon": -73.1550,
+        "elevation_m": 140.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 15.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Municipal water tank providing coverage across central Middlebury."
+    },
+    {
+      "site_id": "VT-ADD-03",
+      "name": "Bristol Ridge",
+      "county": "Addison",
+      "location": {
+        "lat": 44.1380,
+        "lon": -73.0650,
+        "elevation_m": 450.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 25.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": false,
+      "notes": "Commercial communications facility overlooking Bristol notch corridor."
+    },
+    {
+      "site_id": "VT-BEN-01",
+      "name": "Mount Anthony",
+      "county": "Bennington",
+      "location": {
+        "lat": 42.8681,
+        "lon": -73.2208,
+        "elevation_m": 716.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 12.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Prominent southwest peak with clear line of sight to Bennington basin."
+    },
+    {
+      "site_id": "VT-BEN-02",
+      "name": "Equinox Mountain",
+      "county": "Bennington",
+      "location": {
+        "lat": 43.1633,
+        "lon": -73.1239,
+        "elevation_m": 1170.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 20.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 100.0,
+      "is_public_land": false,
+      "notes": "Highest peak in Taconic Range with toll road access and existing comms facilities."
+    },
+    {
+      "site_id": "VT-BEN-03",
+      "name": "Bennington Water Tank",
+      "county": "Bennington",
+      "location": {
+        "lat": 42.8850,
+        "lon": -73.1850,
+        "elevation_m": 260.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 15.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Elevated water storage facility serving central Bennington."
+    },
+    {
+      "site_id": "VT-CAL-01",
+      "name": "Burke Mountain",
+      "county": "Caledonia",
+      "location": {
+        "lat": 44.5714,
+        "lon": -71.8906,
+        "elevation_m": 996.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 30.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Regional communications hub atop Burke Mountain fire tower ridge."
+    },
+    {
+      "site_id": "VT-CAL-02",
+      "name": "St. Johnsbury High Tank",
+      "county": "Caledonia",
+      "location": {
+        "lat": 44.4250,
+        "lon": -72.0180,
+        "elevation_m": 280.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 15.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "High service water tank serving Passumpsic River Valley node mesh."
+    },
+    {
+      "site_id": "VT-CAL-03",
+      "name": "Wheelock Mtn",
+      "county": "Caledonia",
+      "location": {
+        "lat": 44.5830,
+        "lon": -72.1670,
+        "elevation_m": 848.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 10.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Wheelock Mountain summit relay candidate bridging Sheffield notch."
+    },
+    {
+      "site_id": "VT-CHI-01",
+      "name": "Mount Mansfield",
+      "county": "Chittenden",
+      "location": {
+        "lat": 44.5437,
+        "lon": -72.8143,
+        "elevation_m": 1339.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 15.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 100.0,
+      "is_public_land": true,
+      "notes": "Highest point in Vermont, prime statewide backbone node."
+    },
+    {
+      "site_id": "VT-CHI-02",
+      "name": "Bolton Mountain",
+      "county": "Chittenden",
+      "location": {
+        "lat": 44.4890,
+        "lon": -72.8680,
+        "elevation_m": 1120.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 8.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "High-altitude relay bridging Mansfield and Winooski River corridor."
+    },
+    {
+      "site_id": "VT-CHI-03",
+      "name": "Burlington Water Dept",
+      "county": "Chittenden",
+      "location": {
+        "lat": 44.4850,
+        "lon": -73.2050,
+        "elevation_m": 115.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 18.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "City reservoir and elevated tank covering downtown Burlington and waterfront."
+    },
+    {
+      "site_id": "VT-CHI-04",
+      "name": "Saxon Hill",
+      "county": "Chittenden",
+      "location": {
+        "lat": 44.4820,
+        "lon": -73.0780,
+        "elevation_m": 220.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 25.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Suburban repeater site serving Essex, Williston, and Chittenden east."
+    },
+    {
+      "site_id": "VT-CHIT-UVM-PMRC",
+      "name": "UVM Proctor Maple Research Canopy Tower",
+      "county": "Chittenden",
+      "location": {
+        "lat": 44.5302,
+        "lon": -72.8693,
+        "elevation_m": 415.0
+      },
+      "site_type": "research_tower",
+      "mast_height_m": 22.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "source_url": "https://www.uvm.edu/~cwaite/metstations/Tower.html",
+      "notes": "Erected Fall 1991 | 22m walkup aluminum tower hosting long-term meteorological and forest canopy sensors up to 24m | Harvey Rd, Underhill Center, VT"
+    },
+    {
+      "site_id": "VT-ESS-01",
+      "name": "Monadnock Mountain",
+      "county": "Essex",
+      "location": {
+        "lat": 44.9125,
+        "lon": -71.5458,
+        "elevation_m": 956.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 15.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 100.0,
+      "is_public_land": true,
+      "notes": "Isolated northern summit above Connecticut River with historic fire tower."
+    },
+    {
+      "site_id": "VT-ESS-02",
+      "name": "Island Pond Hill",
+      "county": "Essex",
+      "location": {
+        "lat": 44.8150,
+        "lon": -71.8750,
+        "elevation_m": 480.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 20.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": false,
+      "notes": "Communications installation serving town of Brighton and Route 105 corridor."
+    },
+    {
+      "site_id": "VT-ESS-03",
+      "name": "Gore Mountain",
+      "county": "Essex",
+      "location": {
+        "lat": 44.9167,
+        "lon": -71.7917,
+        "elevation_m": 1015.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 10.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Remote high peak in Northeast Kingdom wilderness."
+    },
+    {
+      "site_id": "VT-FRA-01",
+      "name": "Jay Peak",
+      "county": "Franklin",
+      "location": {
+        "lat": 44.9242,
+        "lon": -72.5256,
+        "elevation_m": 1176.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 15.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 100.0,
+      "is_public_land": false,
+      "notes": "High peak spanning Franklin and Orleans border with tram access and power."
+    },
+    {
+      "site_id": "VT-FRA-02",
+      "name": "St. Albans Reservoir",
+      "county": "Franklin",
+      "location": {
+        "lat": 44.8150,
+        "lon": -73.0750,
+        "elevation_m": 160.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 16.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Municipal tank overlooking St. Albans city and northern Champlain lowlands."
+    },
+    {
+      "site_id": "VT-FRA-03",
+      "name": "Richford Ridge",
+      "county": "Franklin",
+      "location": {
+        "lat": 44.9850,
+        "lon": -72.6850,
+        "elevation_m": 420.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 22.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": false,
+      "notes": "Northern border communications facility near Missisquoi River."
+    },
+    {
+      "site_id": "VT-GI-01",
+      "name": "South Hero Water Tower",
+      "county": "Grand Isle",
+      "location": {
+        "lat": 44.6450,
+        "lon": -73.3050,
+        "elevation_m": 65.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 25.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Elevated water tower providing line of sight across Lake Champlain island passage."
+    },
+    {
+      "site_id": "VT-GI-02",
+      "name": "Alburgh Ridge",
+      "county": "Grand Isle",
+      "location": {
+        "lat": 44.9750,
+        "lon": -73.2850,
+        "elevation_m": 55.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 30.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": false,
+      "notes": "Tower covering US-Canada border corridor and north Champlain waters."
+    },
+    {
+      "site_id": "VT-GI-03",
+      "name": "North Hero Silo",
+      "county": "Grand Isle",
+      "location": {
+        "lat": 44.8150,
+        "lon": -73.2900,
+        "elevation_m": 45.0
+      },
+      "site_type": "silo",
+      "mast_height_m": 20.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": false,
+      "notes": "Agricultural silo structure with unobstructed 360-degree flat lake views."
+    },
+    {
+      "site_id": "VT-LAM-01",
+      "name": "Mount Mansfield Summit Ridge",
+      "county": "Lamoille",
+      "location": {
+        "lat": 44.5437,
+        "lon": -72.8143,
+        "elevation_m": 1339.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 15.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 100.0,
+      "is_public_land": true,
+      "notes": "Lamoille county ridge segment connecting Stowe and Cambridge valleys."
+    },
+    {
+      "site_id": "VT-LAM-02",
+      "name": "Sterling Mountain",
+      "county": "Lamoille",
+      "location": {
+        "lat": 44.5750,
+        "lon": -72.7850,
+        "elevation_m": 1132.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 12.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Rugged peak east of Smugglers Notch overlooking Morrisville basin."
+    },
+    {
+      "site_id": "VT-LAM-03",
+      "name": "Morrisville Water Tank",
+      "county": "Lamoille",
+      "location": {
+        "lat": 44.5600,
+        "lon": -72.5950,
+        "elevation_m": 245.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 18.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Municipal tank with excellent coverage of Morrisville and Route 100 corridor."
+    },
+    {
+      "site_id": "VT-LAM-04",
+      "name": "Stowe Pinnacle",
+      "county": "Lamoille",
+      "location": {
+        "lat": 44.4480,
+        "lon": -72.6350,
+        "elevation_m": 800.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 8.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Prominent rocky outcrop commanding expansive views of Stowe valley."
+    },
+    {
+      "site_id": "VT-ORA-01",
+      "name": "Spruce Mountain",
+      "county": "Orange",
+      "location": {
+        "lat": 44.2250,
+        "lon": -72.3950,
+        "elevation_m": 924.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 15.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Historic fire tower site offering 360-degree central Vermont views."
+    },
+    {
+      "site_id": "VT-ORA-02",
+      "name": "Randolph Hill Tank",
+      "county": "Orange",
+      "location": {
+        "lat": 43.9250,
+        "lon": -72.6650,
+        "elevation_m": 265.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 16.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Municipal water storage serving Randolph village and White River valley."
+    },
+    {
+      "site_id": "VT-ORA-03",
+      "name": "Bradford Lookout",
+      "county": "Orange",
+      "location": {
+        "lat": 43.9950,
+        "lon": -72.1450,
+        "elevation_m": 360.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 24.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": false,
+      "notes": "Ridge tower overlooking Connecticut River valley and I-91 corridor."
+    },
+    {
+      "site_id": "VT-ORL-01",
+      "name": "Jay Peak East",
+      "county": "Orleans",
+      "location": {
+        "lat": 44.9280,
+        "lon": -72.5100,
+        "elevation_m": 1140.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 14.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": false,
+      "notes": "Eastern shoulder of Jay massif with wide coverage over Orleans lowlands."
+    },
+    {
+      "site_id": "VT-ORL-02",
+      "name": "Lake Willoughby Ridge",
+      "county": "Orleans",
+      "location": {
+        "lat": 44.7350,
+        "lon": -72.0650,
+        "elevation_m": 820.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 10.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Mount Pisgah cliff ridge framing Lake Willoughby glacial gap."
+    },
+    {
+      "site_id": "VT-ORL-03",
+      "name": "Newport Water Tower",
+      "county": "Orleans",
+      "location": {
+        "lat": 44.9350,
+        "lon": -72.2050,
+        "elevation_m": 240.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 18.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "City water tower serving Newport and Lake Memphremagog basin."
+    },
+    {
+      "site_id": "VT-RUT-01",
+      "name": "Killington Peak",
+      "county": "Rutland",
+      "location": {
+        "lat": 43.6047,
+        "lon": -72.8203,
+        "elevation_m": 1293.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 25.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 100.0,
+      "is_public_land": false,
+      "notes": "Major communications site atop second highest summit in Vermont."
+    },
+    {
+      "site_id": "VT-RUT-02",
+      "name": "Pico Peak",
+      "county": "Rutland",
+      "location": {
+        "lat": 43.6622,
+        "lon": -72.8428,
+        "elevation_m": 1206.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 12.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": false,
+      "notes": "High peak guarding Sherburne Pass and US Route 4 cross-state corridor."
+    },
+    {
+      "site_id": "VT-RUT-03",
+      "name": "Rutland Water Dept Tank",
+      "county": "Rutland",
+      "location": {
+        "lat": 43.6150,
+        "lon": -72.9650,
+        "elevation_m": 250.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 20.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Rutland municipal water reservoir tank on East Mountain."
+    },
+    {
+      "site_id": "VT-RUT-04",
+      "name": "Bird Mountain",
+      "county": "Rutland",
+      "location": {
+        "lat": 43.5950,
+        "lon": -73.1250,
+        "elevation_m": 670.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 8.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Bird Mountain WMA summit with broad coverage of western Rutland lakes."
+    },
+    {
+      "site_id": "VT-WAS-01",
+      "name": "Camel's Hump",
+      "county": "Washington",
+      "location": {
+        "lat": 44.3197,
+        "lon": -72.8861,
+        "elevation_m": 1244.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 10.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 100.0,
+      "is_public_land": true,
+      "notes": "Iconic undeveloped peak with exceptional panoramic line of sight."
+    },
+    {
+      "site_id": "VT-WAS-02",
+      "name": "Mount Hunger",
+      "county": "Washington",
+      "location": {
+        "lat": 44.3989,
+        "lon": -72.6456,
+        "elevation_m": 1079.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 8.0,
+      "access_difficulty": "hike_in",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Worcester Range summit commanding views of capital region and Green spine."
+    },
+    {
+      "site_id": "VT-WAS-03",
+      "name": "Montpelier Water Dept Tank",
+      "county": "Washington",
+      "location": {
+        "lat": 44.2650,
+        "lon": -72.5650,
+        "elevation_m": 260.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 16.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Elevated reservoir tank serving downtown Montpelier and state complex."
+    },
+    {
+      "site_id": "VT-WAS-04",
+      "name": "Barre Silo",
+      "county": "Washington",
+      "location": {
+        "lat": 44.1950,
+        "lon": -72.5050,
+        "elevation_m": 280.0
+      },
+      "site_type": "silo",
+      "mast_height_m": 18.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 85.0,
+      "is_public_land": false,
+      "notes": "Industrial/quarry agricultural structure on Barre hillside."
+    },
+    {
+      "site_id": "VT-WDM-01",
+      "name": "Mount Snow",
+      "county": "Windham",
+      "location": {
+        "lat": 42.9600,
+        "lon": -72.9230,
+        "elevation_m": 1093.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 15.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": false,
+      "notes": "Ski summit with lift infrastructure and power covering southern Green Mountains."
+    },
+    {
+      "site_id": "VT-WDM-02",
+      "name": "Brattleboro Water Tank",
+      "county": "Windham",
+      "location": {
+        "lat": 42.8550,
+        "lon": -72.5650,
+        "elevation_m": 180.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 16.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Water department tank overlooking Brattleboro and Connecticut River."
+    },
+    {
+      "site_id": "VT-WDM-03",
+      "name": "Putney Mountain",
+      "county": "Windham",
+      "location": {
+        "lat": 42.9750,
+        "lon": -72.5850,
+        "elevation_m": 504.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 10.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": false,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": true,
+      "notes": "Prominent open ridge lookout popular for hawk watch and regional RF line of sight."
+    },
+    {
+      "site_id": "VT-WDR-01",
+      "name": "Mount Ascutney",
+      "county": "Windsor",
+      "location": {
+        "lat": 43.4389,
+        "lon": -72.4550,
+        "elevation_m": 958.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 28.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 100.0,
+      "is_public_land": true,
+      "notes": "Monadnock mountain summit with road access, state park, and major broadcast masts."
+    },
+    {
+      "site_id": "VT-WDR-02",
+      "name": "Okemo Mountain",
+      "county": "Windsor",
+      "location": {
+        "lat": 43.4022,
+        "lon": -72.7192,
+        "elevation_m": 1019.0
+      },
+      "site_type": "mountain_summit",
+      "mast_height_m": 14.0,
+      "access_difficulty": "moderate",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": false,
+      "notes": "High peak with fire tower and ski summit infrastructure."
+    },
+    {
+      "site_id": "VT-WDR-03",
+      "name": "Woodstock Reservoir Tank",
+      "county": "Windsor",
+      "location": {
+        "lat": 43.6250,
+        "lon": -72.5250,
+        "elevation_m": 320.0
+      },
+      "site_type": "water_tower",
+      "mast_height_m": 15.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 90.0,
+      "is_public_land": true,
+      "notes": "Municipal tank covering Ottauquechee River valley and Woodstock village."
+    },
+    {
+      "site_id": "VT-WDR-04",
+      "name": "Hartford Hill",
+      "county": "Windsor",
+      "location": {
+        "lat": 43.6550,
+        "lon": -72.3450,
+        "elevation_m": 310.0
+      },
+      "site_type": "communications_tower",
+      "mast_height_m": 22.0,
+      "access_difficulty": "drive_up",
+      "has_grid_power": true,
+      "solar_exposure_pct": 95.0,
+      "is_public_land": false,
+      "notes": "Upper Valley communications tower serving White River Junction and I-89/I-91 junction."
+    }
+  ]
+}

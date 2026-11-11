@@ -1,0 +1,109 @@
+name: Build and Release Regional Data Packs
+
+on:
+  schedule:
+    # Run monthly on the 1st at 00:00 UTC
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: 'Space-delimited regional codes to compile, or "all" for all 65 regions (default: all)'
+        required: false
+        default: 'all'
+      offline_fixtures:
+        description: 'Compile from local offline test fixtures instead of external live feeds'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: build-region-packs
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-and-release:
+    name: Build & Publish Regional Data Packs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install MeshScout
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Cache regional raw sources and Overpass highsites
+        uses: actions/cache@v4
+        with:
+          path: ~/.meshscout/cache
+          key: meshscout-cache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            meshscout-cache-${{ runner.os }}-
+            meshscout-cache-
+
+      - name: Build regional packs
+        run: |
+          TAG_NAME="packs-$(date +'%Y.%m.%d')"
+          BUILD_FLAGS="--out-dir dist/packs --base-url https://github.com/meshscout-project/meshscout/releases/download/${TAG_NAME}"
+          REGIONS_INPUT="${{ github.event.inputs.regions || 'all' }}"
+          if [ "$REGIONS_INPUT" = "all" ] || [ "$REGIONS_INPUT" = "ALL" ]; then
+            BUILD_FLAGS="$BUILD_FLAGS --all"
+          else
+            BUILD_FLAGS="$BUILD_FLAGS --regions $REGIONS_INPUT"
+          fi
+          if [ "${{ github.event.inputs.offline_fixtures }}" = "true" ]; then
+            BUILD_FLAGS="$BUILD_FLAGS --offline-fixtures"
+          fi
+          echo "Running: meshscout packs build $BUILD_FLAGS"
+          meshscout packs build $BUILD_FLAGS
+
+      - name: Validate generated pack artifacts and manifest
+        run: |
+          ls -la dist/packs
+          test -f dist/packs/manifest.json
+          python -c "
+          from meshscout.core.packs import PackManifest
+          manifest = PackManifest.from_file('dist/packs/manifest.json')
+          print(f'Validated manifest with {len(manifest.packs)} packs:')
+          for pid, p in manifest.packs.items():
+              print(f'  - {pid}: {p.row_count} towers, sha256={p.sha256[:10]}...')
+          "
+
+      - name: Release to GitHub Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="packs-$(date +'%Y.%m.%d')"
+          gh release create "$TAG_NAME" dist/packs/* \
+            --title "Regional Data Packs ($TAG_NAME)" \
+            --notes "Automated monthly release of pre-compiled regional tower infrastructure data packs." || \
+          gh release upload "$TAG_NAME" dist/packs/* --clobber
+
+      - name: Create pull request for bundled manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="packs-$(date +'%Y.%m.%d')"
+          cp dist/packs/manifest.json src/meshscout/data/packs/manifest.json
+          if ! git diff --quiet src/meshscout/data/packs/manifest.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git checkout -b "chore/update-manifest-$TAG_NAME"
+            git add src/meshscout/data/packs/manifest.json
+            git commit -m "chore(packs): update bundled manifest to $TAG_NAME"
+            git push origin "chore/update-manifest-$TAG_NAME" --force || echo "::warning::Push skipped"
+            gh pr create --title "chore(packs): update bundled manifest to $TAG_NAME" --body "Automated update of bundled pack manifest from release $TAG_NAME" || echo "::warning::PR creation skipped or not needed"
+          else
+            echo "Bundled manifest is unchanged; no PR needed."
+          fi

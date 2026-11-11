@@ -1,0 +1,297 @@
+{
+  "bounds": {
+    "name": "Vermont_Statewide",
+    "min_lat": 42.72,
+    "max_lat": 45.02,
+    "min_lon": -73.44,
+    "max_lon": -71.46
+  },
+  "features": [
+    {
+      "attributes": {
+        "OBJECTID": 1,
+        "FACILITY_ID": "VT-VCGI-WT-001",
+        "FACNAME": "Burlington Water Dept Reservoir Tank",
+        "FEATURE_TYPE": "Water Tower",
+        "OWNER": "City of Burlington Water Department",
+        "OWNER_TYPE": "MUNI",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 28.0,
+        "ELEV_M": 95.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 95.0,
+        "NOTES": "Municipal elevated reservoir tank with direct line-of-sight across downtown and Lake Champlain."
+      },
+      "geometry": {
+        "x": -73.2012,
+        "y": 44.4785,
+        "z": 95.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 2,
+        "FACILITY_ID": "VT-VCGI-WT-002",
+        "FACNAME": "South Burlington Dorset Street Standpipe",
+        "FEATURE_TYPE": "Water Tower",
+        "OWNER": "City of South Burlington",
+        "OWNER_TYPE": "MUNI",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 32.0,
+        "ELEV_M": 110.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 95.0,
+        "NOTES": "High-capacity municipal standpipe serving southern Chittenden suburban corridor."
+      },
+      "geometry": {
+        "x": -73.1780,
+        "y": 44.4510,
+        "z": 110.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 3,
+        "FACILITY_ID": "VT-VCGI-WT-003",
+        "FACNAME": "Essex Junction Municipal Water Tank",
+        "FEATURE_TYPE": "Water Tower",
+        "OWNER": "Village of Essex Junction Water District",
+        "OWNER_TYPE": "MUNI",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 26.0,
+        "ELEV_M": 120.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 95.0,
+        "NOTES": "Elevated water storage tank adjacent to municipal utility depot."
+      },
+      "geometry": {
+        "x": -73.1055,
+        "y": 44.4925,
+        "z": 120.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 4,
+        "FACILITY_ID": "VT-VCGI-COM-001",
+        "FACNAME": "Mount Philo State Park Public Safety Mast",
+        "FEATURE_TYPE": "Communications Tower",
+        "OWNER": "State of Vermont Department of Public Safety",
+        "OWNER_TYPE": "STATE",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 35.0,
+        "ELEV_M": 295.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 95.0,
+        "NOTES": "State public safety radio tower on state park summit with panoramic valley coverage."
+      },
+      "geometry": {
+        "x": -73.2185,
+        "y": 44.2792,
+        "z": 295.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 5,
+        "FACILITY_ID": "VT-VCGI-COM-002",
+        "FACNAME": "Bolton Mountain VTrans Repeater Tower",
+        "FEATURE_TYPE": "Communications Tower",
+        "OWNER": "Vermont Agency of Transportation (VTrans)",
+        "OWNER_TYPE": "STATE",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 25.0,
+        "ELEV_M": 620.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "moderate",
+        "SOLAR_PCT": 90.0,
+        "NOTES": "VTrans highway communications relay covering mountain pass and I-89 transit corridor."
+      },
+      "geometry": {
+        "x": -72.8710,
+        "y": 44.4172,
+        "z": 620.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 6,
+        "FACILITY_ID": "VT-VCGI-COM-003",
+        "FACNAME": "Williston Commercial Cellular Tower",
+        "FEATURE_TYPE": "Communications Tower",
+        "OWNER": "American Tower Corp",
+        "OWNER_TYPE": "COMMERCIAL",
+        "PUB_PRIV": "PRIV",
+        "HEIGHT_M": 45.0,
+        "ELEV_M": 140.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 95.0,
+        "NOTES": "Commercial multi-carrier lattice mast leased on private parcel."
+      },
+      "geometry": {
+        "x": -73.0780,
+        "y": 44.4420,
+        "z": 140.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 7,
+        "FACILITY_ID": "VT-VCGI-COM-004",
+        "FACNAME": "Colchester Crown Castle Tower",
+        "FEATURE_TYPE": "Communications Tower",
+        "OWNER": "Crown Castle LLC",
+        "OWNER_TYPE": "PRIV",
+        "PUB_PRIV": "PRIV",
+        "HEIGHT_M": 40.0,
+        "ELEV_M": 85.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 95.0,
+        "NOTES": "Private commercial communications monopole near US Route 7."
+      },
+      "geometry": {
+        "x": -73.1890,
+        "y": 44.5350,
+        "z": 85.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 8,
+        "FACILITY_ID": "VT-VCGI-FS-001",
+        "FACNAME": "Burlington Fire Station 1 Central",
+        "FEATURE_TYPE": "Fire Station",
+        "OWNER": "City of Burlington",
+        "OWNER_TYPE": "MUNI",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 10.0,
+        "ELEV_M": 62.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 85.0,
+        "NOTES": "Central municipal emergency services headquarters with rooftop mast mounts."
+      },
+      "geometry": {
+        "x": -73.2135,
+        "y": 44.4760,
+        "z": 62.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 9,
+        "FACILITY_ID": "VT-VCGI-FS-002",
+        "FACNAME": "Essex Junction Fire Department",
+        "FEATURE_TYPE": "Fire Station",
+        "OWNER": "Town of Essex",
+        "OWNER_TYPE": "MUNI",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 9.0,
+        "ELEV_M": 104.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 85.0,
+        "NOTES": "Suburban municipal fire station with backup generator and roof parapet."
+      },
+      "geometry": {
+        "x": -73.1115,
+        "y": 44.4912,
+        "z": 104.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 10,
+        "FACILITY_ID": "VT-VCGI-FS-003",
+        "FACNAME": "Richmond Volunteer Fire Department",
+        "FEATURE_TYPE": "Fire Station",
+        "OWNER": "Town of Richmond",
+        "OWNER_TYPE": "MUNI",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 8.0,
+        "ELEV_M": 96.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 80.0,
+        "NOTES": "Valley municipal emergency station serving rural river corridor."
+      },
+      "geometry": {
+        "x": -72.9995,
+        "y": 44.4045,
+        "z": 96.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 11,
+        "FACILITY_ID": "VT-VCGI-MUN-001",
+        "FACNAME": "Burlington City Hall",
+        "FEATURE_TYPE": "Municipal Public Structure",
+        "OWNER": "City of Burlington",
+        "OWNER_TYPE": "MUNI",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 12.0,
+        "ELEV_M": 60.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 85.0,
+        "NOTES": "Primary municipal civic building with clock tower and roof radio mount."
+      },
+      "geometry": {
+        "x": -73.2128,
+        "y": 44.4765,
+        "z": 60.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 12,
+        "FACILITY_ID": "VT-VCGI-MUN-002",
+        "FACNAME": "Winooski City Hall and Police Headquarters",
+        "FEATURE_TYPE": "Municipal Public Structure",
+        "OWNER": "City of Winooski",
+        "OWNER_TYPE": "MUNI",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 11.0,
+        "ELEV_M": 65.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 85.0,
+        "NOTES": "Combined municipal administrative and public safety building."
+      },
+      "geometry": {
+        "x": -73.1870,
+        "y": 44.4905,
+        "z": 65.0
+      }
+    },
+    {
+      "attributes": {
+        "OBJECTID": 13,
+        "FACILITY_ID": "VT-VCGI-STA-001",
+        "FACNAME": "Waterbury State Office Complex",
+        "FEATURE_TYPE": "State Public Structure",
+        "OWNER": "State of Vermont BGS",
+        "OWNER_TYPE": "STATE",
+        "PUB_PRIV": "PUB",
+        "HEIGHT_M": 14.0,
+        "ELEV_M": 130.0,
+        "GRID_POWER": true,
+        "ACCESS_DIFF": "drive_up",
+        "SOLAR_PCT": 85.0,
+        "NOTES": "State emergency management headquarters complex located in Waterbury."
+      },
+      "geometry": {
+        "x": -72.7560,
+        "y": 44.3370,
+        "z": 130.0
+      }
+    }
+  ]
+}

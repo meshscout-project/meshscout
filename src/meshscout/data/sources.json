@@ -1,0 +1,41 @@
+{
+  "fcc_asr": {
+    "id": "fcc_asr",
+    "name": "FCC Antenna Structure Registration (ASR) Bulk Database",
+    "country": "US",
+    "license": "Public Domain",
+    "license_url": "https://www.fcc.gov/general/website-policies",
+    "attribution": "Federal Communications Commission (FCC)",
+    "url": "https://data.fcc.gov/download/pub/uls/complete/r_tower.zip",
+    "description": "Authoritative bulk database of all antenna structures registered with the United States Federal Communications Commission.",
+    "file_pattern": "*.dat",
+    "data_format": "pipe_delimited_dat",
+    "update_frequency": "weekly"
+  },
+  "ised_sms": {
+    "id": "ised_sms",
+    "name": "Canadian Spectrum Management System (SMS) Tower and Station Data",
+    "country": "CA",
+    "license": "Open Government Licence - Canada",
+    "license_url": "https://open.canada.ca/en/open-government-licence-canada",
+    "attribution": "Innovation, Science and Economic Development Canada (ISED)",
+    "url": "https://www.ic.gc.ca/engineering/SMS_TAFL_Files/TAFL_LTAF.zip",
+    "description": "Authoritative registry of radio communication stations, antenna towers, and spectrum authorizations across Canada.",
+    "file_pattern": "*.csv",
+    "data_format": "csv",
+    "update_frequency": "monthly"
+  },
+  "civic_osm": {
+    "id": "civic_osm",
+    "name": "OpenStreetMap Civic Infrastructure and High Sites",
+    "country": "MULTI",
+    "license": "ODbL 1.0",
+    "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "attribution": "© OpenStreetMap contributors (ODbL 1.0)",
+    "url": "https://overpass-api.de/api/interpreter",
+    "description": "Community-curated civic infrastructure including municipal water towers, fire lookout towers, communications masts, and observation towers.",
+    "file_pattern": "*.json",
+    "data_format": "geojson",
+    "update_frequency": "continuous"
+  }
+}
