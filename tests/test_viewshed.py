@@ -19,7 +19,9 @@ from meshscout.core.contracts import (
 )
 from meshscout.core.viewshed import (
     TargetGridPoint,
+    compute_radial_viewshed_polygon,
     compute_viewshed,
+    evaluate_target_coverage,
     generate_target_grid,
     haversine_distance_km,
     sample_transect_points,
@@ -388,3 +390,355 @@ def test_radial_viewshed_polygon_ridge_scalloping(
         lat, lon = pt
         assert 43.5 <= lat <= 45.5
         assert -74.0 <= lon <= -71.5
+
+
+def test_legacy_symmetric_parity_when_client_radio_is_none(
+    chittenden_sites: Dict[str, SiteCandidate],
+) -> None:
+    """When client_radio is None with zero penalties and downlink direction,
+    viewshed and radial polygon results preserve exact symmetric link parity.
+    """
+    mansfield = chittenden_sites["VT-PEAK-01"]
+    essex = chittenden_sites["VT-TWR-02"]
+    burlington = chittenden_sites["VT-TWR-03"]
+
+    targets = [
+        TargetGridPoint(target_id="T-ESSEX", coordinate=essex.location, rx_height_m=2.0),
+        TargetGridPoint(target_id="T-BURL", coordinate=burlington.location, rx_height_m=2.0),
+    ]
+    radio = RadioConfig(
+        frequency_mhz=915.0,
+        tx_power_dbm=22.0,
+        rx_sensitivity_dbm=-124.0,
+        antenna_gain_dbi=5.8,
+        cable_loss_db=1.0,
+        environmental_clutter_db=3.0,
+    )
+
+    legacy_vs = compute_viewshed(
+        repeater=mansfield,
+        targets=targets,
+        elevation_fn=_winooski_basin_terrain,
+        radio=radio,
+        min_margin_db=10.0,
+    ).value
+    assert legacy_vs is not None
+    assert legacy_vs.direction == "downlink"
+
+    for direction in ("downlink", "uplink", "two_way"):
+        explicit_vs = compute_viewshed(
+            repeater=mansfield,
+            targets=targets,
+            elevation_fn=_winooski_basin_terrain,
+            radio=radio,
+            min_margin_db=10.0,
+            client_radio=radio,
+            client_rx_height_m=2.0,
+            client_env_loss_db=0.0,
+            site_noise_penalty_db=0.0,
+            direction=direction,
+        ).value
+        assert explicit_vs is not None
+        assert explicit_vs.direction == direction
+        assert explicit_vs.covered_target_ids == legacy_vs.covered_target_ids
+        for leg_pt, exp_pt in zip(legacy_vs.target_results, explicit_vs.target_results):
+            assert leg_pt.downlink_margin_db is None
+            assert leg_pt.uplink_margin_db is None
+            assert exp_pt.downlink_margin_db == pytest.approx(leg_pt.link_margin_db, abs=1e-2)
+            assert exp_pt.uplink_margin_db == pytest.approx(leg_pt.link_margin_db, abs=1e-2)
+            assert exp_pt.estimated_rx_dbm == pytest.approx(leg_pt.estimated_rx_dbm, abs=1e-2)
+            assert exp_pt.link_margin_db == pytest.approx(leg_pt.link_margin_db, abs=1e-2)
+
+    legacy_poly = compute_radial_viewshed_polygon(
+        origin=mansfield,
+        num_radials=36,
+        max_range_km=55.0,
+        radio=radio,
+        elevation_fn=_winooski_basin_terrain,
+        min_margin_db=12.0,
+    ).value
+    explicit_poly = compute_radial_viewshed_polygon(
+        origin=mansfield,
+        num_radials=36,
+        max_range_km=55.0,
+        radio=radio,
+        elevation_fn=_winooski_basin_terrain,
+        min_margin_db=12.0,
+        client_radio=radio,
+        client_rx_height_m=2.0,
+        client_env_loss_db=0.0,
+        site_noise_penalty_db=0.0,
+        direction="two_way",
+    ).value
+    assert legacy_poly is not None
+    assert explicit_poly is not None
+    assert legacy_poly.direction == "downlink"
+    assert explicit_poly.direction == "two_way"
+    assert explicit_poly.los_area_sq_km == legacy_poly.los_area_sq_km
+    assert explicit_poly.diffracted_area_sq_km == legacy_poly.diffracted_area_sq_km
+    assert explicit_poly.los_polygon == legacy_poly.los_polygon
+    assert explicit_poly.diffracted_polygon == legacy_poly.diffracted_polygon
+
+
+def test_invalid_direction_returns_result_fail(
+    chittenden_sites: Dict[str, SiteCandidate],
+) -> None:
+    """Invalid direction strings must return Result.fail('INVALID_DIRECTION', ...)."""
+    mansfield = chittenden_sites["VT-PEAK-01"]
+    target = TargetGridPoint(
+        target_id="T-01",
+        coordinate=Coordinate(lat=44.49, lon=-73.11, elevation_m=105.0),
+    )
+
+    bad_vs = compute_viewshed(
+        repeater=mansfield,
+        targets=[target],
+        direction="sideways",
+    )
+    assert not bad_vs.ok
+    assert bad_vs.error is not None
+    assert bad_vs.error.code == "INVALID_DIRECTION"
+
+    bad_poly = compute_radial_viewshed_polygon(
+        origin=mansfield,
+        num_radials=16,
+        direction="bidirectional_invalid",
+    )
+    assert not bad_poly.ok
+    assert bad_poly.error is not None
+    assert bad_poly.error.code == "INVALID_DIRECTION"
+
+    with pytest.raises(ValueError, match="Invalid direction"):
+        evaluate_target_coverage(
+            repeater=mansfield,
+            target=target,
+            radio=RadioConfig(),
+            direction="invalid",
+        )
+
+
+@pytest.mark.parametrize(
+    "rx_sensitivity_dbm,min_margin_db",
+    [
+        (-124.0, 16.0),  # SHORT_TURBO (-124 dBm) with 16 dB mobile fade margin
+        (-134.0, 26.0),  # -134 dBm sensitivity with 26 dB fade margin (same cutoff horizon)
+    ],
+)
+def test_station_g2_backbone_with_sensecap_t1000e_strict_uplink_shrinkage(
+    chittenden_sites: Dict[str, SiteCandidate],
+    rx_sensitivity_dbm: float,
+    min_margin_db: float,
+) -> None:
+    """STATION_G2_BACKBONE (28 dBm, 8.0 dBi, +6 dB tower noise) paired with
+    SENSECAP_T1000E (20 dBm, 1.5 dBi, +6 dB vehicle clutter) exhibits strict
+    uplink shrinkage (uplink_area < downlink_area) and two_way == uplink.
+    """
+    mansfield = chittenden_sites["VT-PEAK-01"]
+    station_g2 = RadioConfig(
+        frequency_mhz=915.0,
+        tx_power_dbm=28.0,
+        rx_sensitivity_dbm=rx_sensitivity_dbm,
+        antenna_gain_dbi=8.0,
+        cable_loss_db=1.5,
+        environmental_clutter_db=0.0,
+    )
+    sensecap_t1000e = RadioConfig(
+        frequency_mhz=915.0,
+        tx_power_dbm=20.0,
+        rx_sensitivity_dbm=rx_sensitivity_dbm,
+        antenna_gain_dbi=1.5,
+        cable_loss_db=0.0,
+        environmental_clutter_db=0.0,
+    )
+
+    common_kwargs = dict(
+        origin=mansfield,
+        num_radials=36,
+        max_range_km=80.0,
+        radio=station_g2,
+        elevation_fn=_winooski_basin_terrain,
+        min_margin_db=min_margin_db,
+        distance_steps=40,
+        client_radio=sensecap_t1000e,
+        client_rx_height_m=1.5,
+        client_env_loss_db=6.0,
+        site_noise_penalty_db=6.0,
+    )
+
+    down_poly = compute_radial_viewshed_polygon(**common_kwargs, direction="downlink").value
+    up_poly = compute_radial_viewshed_polygon(**common_kwargs, direction="uplink").value
+    twoway_poly = compute_radial_viewshed_polygon(**common_kwargs, direction="two_way").value
+
+    assert down_poly is not None
+    assert up_poly is not None
+    assert twoway_poly is not None
+
+    # Uplink suffers 8 dB lower TX power + 6 dB tower noise = 14 dB deficit vs downlink
+    assert up_poly.los_area_sq_km < down_poly.los_area_sq_km
+    assert up_poly.diffracted_area_sq_km < down_poly.diffracted_area_sq_km
+    assert up_poly.marginal_area_sq_km < down_poly.marginal_area_sq_km
+
+    assert twoway_poly.los_area_sq_km == up_poly.los_area_sq_km
+    assert twoway_poly.diffracted_area_sq_km == up_poly.diffracted_area_sq_km
+    assert twoway_poly.los_polygon == up_poly.los_polygon
+    assert twoway_poly.diffracted_polygon == up_poly.diffracted_polygon
+
+    # Verify single-application clutter math and 14 dB downlink-over-uplink delta on point coverage
+    burlington = TargetGridPoint(
+        target_id="VAL-BURLINGTON",
+        coordinate=chittenden_sites["VT-TWR-03"].location,
+    )
+    pt_cov = evaluate_target_coverage(
+        repeater=mansfield,
+        target=burlington,
+        radio=station_g2,
+        elevation_fn=_winooski_basin_terrain,
+        client_radio=sensecap_t1000e,
+        client_rx_height_m=1.5,
+        client_env_loss_db=6.0,
+        site_noise_penalty_db=6.0,
+        direction="two_way",
+    )
+    assert pt_cov.downlink_margin_db is not None
+    assert pt_cov.uplink_margin_db is not None
+    assert pt_cov.downlink_margin_db - pt_cov.uplink_margin_db == pytest.approx(14.0, abs=1e-2)
+    assert pt_cov.link_margin_db == pytest.approx(pt_cov.uplink_margin_db, abs=1e-2)
+
+
+def test_r2_r4_rooftop_client_uplink_exceeds_rak4631_solar_downlink(
+    chittenden_sites: Dict[str, SiteCandidate],
+) -> None:
+    """Mandatory R-2/R-4 counter-case: pairing a 28.0 dBm rooftop client
+    (8.0 dBi, 6.0 m AGL, 0 dB clutter) with a 22.0 dBm RAK4631_SOLAR site
+    (5.8 dBi, 1 dB site noise) proves uplink area strictly exceeds downlink
+    area while two_way == downlink.
+    """
+    mansfield = chittenden_sites["VT-PEAK-01"]
+    rak4631_solar = RadioConfig(
+        frequency_mhz=915.0,
+        tx_power_dbm=22.0,
+        rx_sensitivity_dbm=-124.0,
+        antenna_gain_dbi=5.8,
+        cable_loss_db=0.5,
+        environmental_clutter_db=0.0,
+    )
+    rooftop_client = RadioConfig(
+        frequency_mhz=915.0,
+        tx_power_dbm=28.0,
+        rx_sensitivity_dbm=-124.0,
+        antenna_gain_dbi=8.0,
+        cable_loss_db=1.0,
+        environmental_clutter_db=0.0,
+    )
+
+    common_kwargs = dict(
+        origin=mansfield,
+        num_radials=36,
+        max_range_km=80.0,
+        radio=rak4631_solar,
+        elevation_fn=_winooski_basin_terrain,
+        min_margin_db=30.0,
+        distance_steps=40,
+        client_radio=rooftop_client,
+        client_rx_height_m=6.0,
+        client_env_loss_db=0.0,
+        site_noise_penalty_db=1.0,
+    )
+
+    down_poly = compute_radial_viewshed_polygon(**common_kwargs, direction="downlink").value
+    up_poly = compute_radial_viewshed_polygon(**common_kwargs, direction="uplink").value
+    twoway_poly = compute_radial_viewshed_polygon(**common_kwargs, direction="two_way").value
+
+    assert down_poly is not None
+    assert up_poly is not None
+    assert twoway_poly is not None
+
+    # Uplink enjoys +6 dB higher TX power minus 1 dB site noise = +5 dB net advantage over downlink
+    assert up_poly.los_area_sq_km > down_poly.los_area_sq_km
+    assert up_poly.diffracted_area_sq_km > down_poly.diffracted_area_sq_km
+    assert up_poly.marginal_area_sq_km > down_poly.marginal_area_sq_km
+
+    assert twoway_poly.los_area_sq_km == down_poly.los_area_sq_km
+    assert twoway_poly.diffracted_area_sq_km == down_poly.diffracted_area_sq_km
+    assert twoway_poly.marginal_area_sq_km == down_poly.marginal_area_sq_km
+    assert twoway_poly.los_polygon == down_poly.los_polygon
+    assert twoway_poly.diffracted_polygon == down_poly.diffracted_polygon
+
+    # Point evaluation confirms +5.0 dB uplink advantage and two_way == downlink
+    burlington = TargetGridPoint(
+        target_id="VAL-BURLINGTON",
+        coordinate=chittenden_sites["VT-TWR-03"].location,
+        rx_height_m=2.0,
+    )
+    pt_cov = evaluate_target_coverage(
+        repeater=mansfield,
+        target=burlington,
+        radio=rak4631_solar,
+        elevation_fn=_winooski_basin_terrain,
+        client_radio=rooftop_client,
+        client_rx_height_m=6.0,
+        client_env_loss_db=0.0,
+        site_noise_penalty_db=1.0,
+        direction="two_way",
+    )
+    assert pt_cov.uplink_margin_db is not None
+    assert pt_cov.downlink_margin_db is not None
+    assert pt_cov.uplink_margin_db - pt_cov.downlink_margin_db == pytest.approx(5.0, abs=1e-2)
+    assert pt_cov.link_margin_db == pytest.approx(pt_cov.downlink_margin_db, abs=1e-2)
+
+
+def test_two_way_area_never_exceeds_min_uplink_downlink_across_fixtures(
+    chittenden_sites: Dict[str, SiteCandidate],
+) -> None:
+    """Across all Chittenden fixture sites and asymmetric hardware pairings,
+    two_way LOS and marginal/diffracted areas never exceed min(uplink, downlink).
+    """
+    pairings = [
+        # Weak handheld / vehicle client vs high-power tower
+        (
+            RadioConfig(tx_power_dbm=28.0, antenna_gain_dbi=8.0, rx_sensitivity_dbm=-124.0),
+            RadioConfig(tx_power_dbm=20.0, antenna_gain_dbi=1.5, rx_sensitivity_dbm=-124.0),
+            2.0,
+            6.0,
+            6.0,
+            16.0,
+        ),
+        # High-power rooftop client vs low-power solar repeater
+        (
+            RadioConfig(tx_power_dbm=22.0, antenna_gain_dbi=5.8, rx_sensitivity_dbm=-124.0),
+            RadioConfig(tx_power_dbm=28.0, antenna_gain_dbi=8.0, rx_sensitivity_dbm=-124.0),
+            6.0,
+            0.0,
+            1.0,
+            28.0,
+        ),
+    ]
+
+    for site in chittenden_sites.values():
+        for site_radio, client_radio, rx_h, env_loss, noise_pen, min_margin in pairings:
+            kwargs = dict(
+                origin=site,
+                num_radials=24,
+                max_range_km=65.0,
+                radio=site_radio,
+                elevation_fn=_winooski_basin_terrain,
+                min_margin_db=min_margin,
+                distance_steps=30,
+                client_radio=client_radio,
+                client_rx_height_m=rx_h,
+                client_env_loss_db=env_loss,
+                site_noise_penalty_db=noise_pen,
+            )
+            down = compute_radial_viewshed_polygon(**kwargs, direction="downlink").value
+            up = compute_radial_viewshed_polygon(**kwargs, direction="uplink").value
+            twoway = compute_radial_viewshed_polygon(**kwargs, direction="two_way").value
+
+            assert down is not None and up is not None and twoway is not None
+            assert twoway.los_area_sq_km <= min(up.los_area_sq_km, down.los_area_sq_km)
+            assert twoway.diffracted_area_sq_km <= min(
+                up.diffracted_area_sq_km, down.diffracted_area_sq_km
+            )
+            assert twoway.marginal_area_sq_km <= min(
+                up.marginal_area_sq_km, down.marginal_area_sq_km
+            )
+

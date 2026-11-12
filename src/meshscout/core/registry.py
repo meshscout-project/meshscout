@@ -24,12 +24,14 @@ from meshscout.core.contracts import (
     ElevationPoint,
     ElevationProfile,
     RadioConfig,
+    ReachabilityState,
     Result,
     SiteCandidate,
     SiteType,
 )
 from meshscout.core.fresnel import analyze_fresnel_clearance, haversine_distance_km
 from meshscout.core.itm import evaluate_point_to_point_link
+from meshscout.core.presets import resolve_site_radio_profile
 from meshscout.core.scorer import score_site_viability
 
 COMPASS_16_WINDS: Tuple[str, ...] = (
@@ -115,6 +117,9 @@ class HomeTowerReachItem(BaseModel):
     link_margin_db: float
     viability_score: float = Field(..., ge=0.0, le=100.0)
     recommended_rank: int = Field(..., ge=1)
+    uplink_margin_db: Optional[float] = Field(default=None)
+    downlink_margin_db: Optional[float] = Field(default=None)
+    reachability_state: Optional[ReachabilityState] = Field(default=None)
 
 
 class HomeReachReport(BaseModel):
@@ -214,12 +219,16 @@ def evaluate_home_node_reach(
     nodes: Sequence[RegisteredNode],
     radio: Optional[RadioConfig] = None,
     elevation_fn: Optional[Callable[[float, float], float]] = None,
+    client_radio: Optional[RadioConfig] = None,
+    client_env_loss_db: float = 0.0,
+    protocol_id: str = "MESHTASTIC_LONGFAST",
+    season_id: str = "SUMMER_FOLIAGE",
 ) -> Result[HomeReachReport]:
     """Evaluate 360-degree point-to-point reach from the operator's home node to registered sites.
 
     Filters out `BLOCKED` and `DISMANTLED` sites, computes forward azimuth and 16-wind compass direction,
     evaluates Longley-Rice ITM link budget and Fresnel clearance, and ranks towers by:
-      1. Reachability (`link_margin_db >= 0.0`)
+      1. Reachability (`link_margin_db >= 0.0` in legacy mode, or `ReachabilityState` priority when `client_radio` is supplied)
       2. Active on-air status (`ACTIVE_ON_AIR` > `TESTING` > `CANDIDATE`)
       3. Direct Line-of-Sight (`has_line_of_sight`)
       4. Combined RF link margin and civic site viability score
@@ -228,6 +237,12 @@ def evaluate_home_node_reach(
         return Result.fail(
             code="INVALID_HOME_HEIGHT",
             message=f"home_height_agl_m must be non-negative, got {home_height_agl_m}",
+        )
+
+    if client_env_loss_db < 0.0:
+        return Result.fail(
+            code="INVALID_CLIENT_ENV_LOSS",
+            message=f"client_env_loss_db must be non-negative, got {client_env_loss_db}",
         )
 
     if radio is None:
@@ -256,21 +271,60 @@ def evaluate_home_node_reach(
             notes=node.notes,
         )
 
-        profile = _build_transect_profile(
-            home_site=home_candidate,
-            target_site=target_candidate,
-            num_points=15,
-            elevation_fn=elevation_fn,
-        )
+        if client_radio is None:
+            profile = _build_transect_profile(
+                home_site=home_candidate,
+                target_site=target_candidate,
+                num_points=15,
+                elevation_fn=elevation_fn,
+            )
+            link_res = evaluate_point_to_point_link(profile=profile, radio=radio)
+            freq_mhz = radio.frequency_mhz
+        else:
+            prof_res = resolve_site_radio_profile(
+                site_type=node.site_type,
+                hardware_id=node.hardware_preset,
+                protocol_id=protocol_id,
+                season_id=season_id,
+            )
+            if not prof_res.ok or prof_res.value is None:
+                if prof_res.error is not None and prof_res.error.code == "UNKNOWN_HARDWARE_PRESET":
+                    prof_res = resolve_site_radio_profile(
+                        site_type=node.site_type,
+                        hardware_id="RAK4631_SOLAR",
+                        protocol_id=protocol_id,
+                        season_id=season_id,
+                    )
+                if not prof_res.ok or prof_res.value is None:
+                    err = prof_res.error
+                    return Result.fail(
+                        code=err.code if err is not None else "SITE_RADIO_PROFILE_ERROR",
+                        message=err.message if err is not None else "Failed to resolve site radio profile.",
+                    )
+            site_prof = prof_res.value
 
-        link_res = evaluate_point_to_point_link(profile=profile, radio=radio)
+            profile = _build_transect_profile(
+                home_site=target_candidate,
+                target_site=home_candidate,
+                num_points=15,
+                elevation_fn=elevation_fn,
+            )
+            link_res = evaluate_point_to_point_link(
+                profile=profile,
+                radio=site_prof.radio,
+                target_radio=client_radio,
+                source_noise_penalty_db=site_prof.noise_penalty_db,
+                client_env_loss_db=client_env_loss_db,
+            )
+            freq_mhz = site_prof.radio.frequency_mhz
+
         if not link_res.ok or link_res.value is None:
             continue
         link = link_res.value
 
         fresnel_res = analyze_fresnel_clearance(
             profile=profile,
-            frequency_mhz=radio.frequency_mhz,
+            frequency_mhz=freq_mhz,
         )
         fresnel_60 = (
             fresnel_res.value.fresnel_60pct_clear
@@ -302,6 +356,9 @@ def evaluate_home_node_reach(
                 link_margin_db=link.link_margin_db,
                 viability_score=viability_score,
                 recommended_rank=1,
+                uplink_margin_db=link.uplink_margin_db,
+                downlink_margin_db=link.downlink_margin_db,
+                reachability_state=link.reachability_state,
             )
         )
 
@@ -313,36 +370,58 @@ def evaluate_home_node_reach(
         DeploymentStatus.DISMANTLED: 0,
     }
 
-    raw_items.sort(
-        key=lambda item: (
-            item.link_margin_db >= 0.0,
-            status_priority.get(item.status, 0),
-            item.has_line_of_sight,
-            round(item.link_margin_db + 0.5 * item.viability_score, 4),
-        ),
-        reverse=True,
-    )
+    if client_radio is None:
+        raw_items.sort(
+            key=lambda item: (
+                item.link_margin_db >= 0.0,
+                status_priority.get(item.status, 0),
+                item.has_line_of_sight,
+                round(item.link_margin_db + 0.5 * item.viability_score, 4),
+            ),
+            reverse=True,
+        )
+    else:
+        reachability_priority: Dict[ReachabilityState, int] = {
+            ReachabilityState.TWO_WAY: 3,
+            ReachabilityState.HEAR_ONLY_ALLIGATOR: 2,
+            ReachabilityState.UPLINK_ONLY: 1,
+            ReachabilityState.UNREACHABLE: 0,
+        }
+        raw_items.sort(
+            key=lambda item: (
+                reachability_priority.get(item.reachability_state or ReachabilityState.UNREACHABLE, 0),
+                status_priority.get(item.status, 0),
+                item.has_line_of_sight,
+                round(item.link_margin_db + 0.5 * item.viability_score, 4),
+            ),
+            reverse=True,
+        )
 
     ranked_items: List[HomeTowerReachItem] = []
     for idx, item in enumerate(raw_items, start=1):
         ranked_items.append(item.model_copy(update={"recommended_rank": idx}))
 
+    def _is_two_way_reachable(item: HomeTowerReachItem) -> bool:
+        if client_radio is not None:
+            return item.reachability_state == ReachabilityState.TWO_WAY
+        return item.link_margin_db >= 0.0
+
     reachable_active = sum(
         1
         for item in ranked_items
-        if item.link_margin_db >= 0.0 and item.status == DeploymentStatus.ACTIVE_ON_AIR
+        if _is_two_way_reachable(item) and item.status == DeploymentStatus.ACTIVE_ON_AIR
     )
     reachable_candidates = sum(
         1
         for item in ranked_items
-        if item.link_margin_db >= 0.0
+        if _is_two_way_reachable(item)
         and item.status in (DeploymentStatus.CANDIDATE, DeploymentStatus.TESTING)
     )
 
     best_az: Optional[float] = None
     best_card: Optional[str] = None
     for item in ranked_items:
-        if item.link_margin_db >= 0.0:
+        if _is_two_way_reachable(item):
             best_az = item.azimuth_deg
             best_card = item.cardinal_direction
             break

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import warnings
 import pytest
-from fastapi.testclient import TestClient
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message=".*BlockingPortal.*", category=DeprecationWarning)
+    from fastapi.testclient import TestClient
 
 from meshscout.web.app import create_web_app
 
@@ -348,3 +352,70 @@ def test_hosted_mode_env_vars(monkeypatch: pytest.MonkeyPatch, temp_db_path: Pat
         headers={"X-Club-Token": "env-secret-token"},
     )
     assert allowed.status_code == 200
+
+
+def test_hosted_mode_home_check_skips_prefs_persistence_unless_authenticated(
+    temp_db_path: Path,
+) -> None:
+    """Verify unauthenticated POST /api/home-check with persist_height=True returns 200 without mutating /api/state."""
+    club_token = "coordinator-home-check-token"
+    app = create_web_app(
+        db_path=temp_db_path,
+        hosted_mode=True,
+        club_token=club_token,
+    )
+    client = TestClient(app)
+
+    init_prefs = client.get("/api/state").json()["preferences"]
+    init_agl = init_prefs["home_height_agl_m"]
+    assert init_agl == pytest.approx(8.0, abs=1e-4)
+
+    # 1. Unauthenticated caller sends persist_height=True and home_height_agl_m=1.5
+    unauth_resp = client.post(
+        "/api/home-check",
+        json={
+            "home_lat": 44.4906,
+            "home_lon": -73.1112,
+            "home_elev_m": 108.0,
+            "home_height_agl_m": 1.5,
+            "persist_height": True,
+            "client_preset": "SENSECAP_T1000E",
+            "client_env": "OUTDOOR_CLEAR",
+        },
+    )
+    assert unauth_resp.status_code == 200
+    unauth_data = unauth_resp.json()
+    assert unauth_data["ok"] is True
+    assert unauth_data["client_local_home"] is True
+    assert unauth_data["home_height_agl_m"] == pytest.approx(1.5, abs=1e-4)
+    assert len(unauth_data["ranked_towers"]) > 0
+
+    # Server workspace_prefs MUST remain completely unchanged
+    after_unauth_prefs = client.get("/api/state").json()["preferences"]
+    assert after_unauth_prefs["home_height_agl_m"] == pytest.approx(init_agl, abs=1e-4)
+
+    # 2. Invalid coordinator token still returns 200 reach results without persisting
+    bad_tok_resp = client.post(
+        "/api/home-check",
+        json={"home_height_agl_m": 1.5, "persist_height": True},
+        headers={"X-Club-Token": "wrong-token"},
+    )
+    assert bad_tok_resp.status_code == 200
+    assert bad_tok_resp.json()["client_local_home"] is True
+    assert client.get("/api/state").json()["preferences"]["home_height_agl_m"] == pytest.approx(
+        init_agl, abs=1e-4
+    )
+
+    # 3. Authenticated coordinator token DOES persist home_height_agl_m
+    auth_resp = client.post(
+        "/api/home-check",
+        json={"home_height_agl_m": 1.5, "persist_height": True},
+        headers={"X-Club-Token": club_token},
+    )
+    assert auth_resp.status_code == 200
+    auth_data = auth_resp.json()
+    assert auth_data["ok"] is True
+    assert "client_local_home" not in auth_data
+    assert client.get("/api/state").json()["preferences"]["home_height_agl_m"] == pytest.approx(
+        1.5, abs=1e-4
+    )

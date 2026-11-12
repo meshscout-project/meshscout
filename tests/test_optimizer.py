@@ -9,12 +9,19 @@ import pytest
 from meshscout.core.contracts import (
     AccessDifficulty,
     Coordinate,
+    ReachabilityState,
     SiteCandidate,
     SiteType,
 )
 from meshscout.core.optimizer import (
     estimate_site_deployment_cost,
+    find_optimal_mesh_route,
     solve_minimum_set_cover,
+)
+from meshscout.core.presets import (
+    CLIENT_ENVIRONMENT_PROFILES,
+    build_radio_config,
+    resolve_site_radio_profile,
 )
 from meshscout.core.viewshed import TargetCoveragePoint, ViewshedResult
 
@@ -299,3 +306,303 @@ def test_find_optimal_mesh_route_2hop_bridge() -> None:
     assert route.legs[1].target_site_id == "VT-STOW-01"
     assert route.bottleneck_margin_db > 0.0
     assert route.hop_limit_exceeded is False
+    for leg in route.legs:
+        assert leg.forward_margin_db is None
+        assert leg.reverse_margin_db is None
+        assert leg.reachability_state is None
+
+
+def test_find_optimal_mesh_route_client_origin_vehicle_cabin_3hop() -> None:
+    """Verify SENSECAP_T1000E + VEHICLE_CABIN client routes across 3-hop backhaul without leaking cabin loss to repeater backhaul."""
+    origin = SiteCandidate(
+        site_id="VT-CLIENT-CABIN",
+        name="Mobile Vehicle Tracker (Burlington)",
+        location=Coordinate(lat=44.4000, lon=-73.2500, elevation_m=65.0),
+        site_type=SiteType.CUSTOM,
+        mast_height_m=1.5,
+    )
+    rep1 = SiteCandidate(
+        site_id="VT-WEST-RELAY",
+        name="West Foothill Solar Relay",
+        location=Coordinate(lat=44.5200, lon=-73.1200, elevation_m=500.0),
+        site_type=SiteType.FIRE_LOOKOUT,
+        mast_height_m=10.0,
+    )
+    rep2 = SiteCandidate(
+        site_id="VT-EAST-RELAY",
+        name="East Ridge Solar Relay",
+        location=Coordinate(lat=44.5200, lon=-72.9000, elevation_m=520.0),
+        site_type=SiteType.MOUNTAIN_PEAK,
+        mast_height_m=12.0,
+    )
+    destination = SiteCandidate(
+        site_id="VT-MONTPELIER-GW",
+        name="Montpelier Civic Gateway",
+        location=Coordinate(lat=44.4000, lon=-72.7600, elevation_m=160.0),
+        site_type=SiteType.BUILDING_ROOFTOP,
+        mast_height_m=10.0,
+    )
+
+    def two_basin_terrain(lat: float, lon: float) -> float:
+        # Central massif blocks direct origin->dest, origin->rep2, and rep1->dest,
+        # while west flank (origin->rep1), north crest (rep1->rep2), and east flank (rep2->dest) are clear.
+        if lat < 44.5050 and -73.1100 < lon < -72.9100:
+            return 2500.0
+        return 90.0
+
+    t1000e_radio = build_radio_config("SENSECAP_T1000E", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+    solar_radio = build_radio_config("RAK4631_SOLAR", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+    assert t1000e_radio is not None and solar_radio is not None
+    cabin_loss_db = CLIENT_ENVIRONMENT_PROFILES["VEHICLE_CABIN"].clutter_loss_db
+
+    res_cabin = find_optimal_mesh_route(
+        origin=origin,
+        destination=destination,
+        candidate_repeaters=[rep1, rep2],
+        radio=solar_radio,
+        elevation_fn=two_basin_terrain,
+        max_hops=3,
+        min_link_margin_db=3.0,
+        origin_client_radio=t1000e_radio,
+        client_env_loss_db=cabin_loss_db,
+    )
+    assert res_cabin.ok is True
+    assert res_cabin.value is not None
+    route = res_cabin.value
+    assert route.route_found is True
+    assert route.total_hops == 3
+    assert route.intermediate_node_ids == ["VT-WEST-RELAY", "VT-EAST-RELAY"]
+    assert len(route.legs) == 3
+
+    for leg in route.legs:
+        assert leg.forward_margin_db is not None
+        assert leg.reverse_margin_db is not None
+        assert leg.reachability_state == ReachabilityState.TWO_WAY
+        assert leg.link_margin_db == round(min(leg.forward_margin_db, leg.reverse_margin_db), 1)
+        assert min(leg.forward_margin_db, leg.reverse_margin_db) >= 3.0
+
+    # Re-run with client_env_loss_db=0.0 to prove VEHICLE_CABIN (6.0 dB) applies ONLY to leg 0 (client leg)
+    # and NOT to leg 1 (pure repeater-to-repeater backhaul) or leg 2 (repeater-to-fixed-gateway)!
+    res_outdoor = find_optimal_mesh_route(
+        origin=origin,
+        destination=destination,
+        candidate_repeaters=[rep1, rep2],
+        radio=solar_radio,
+        elevation_fn=two_basin_terrain,
+        max_hops=3,
+        min_link_margin_db=3.0,
+        origin_client_radio=t1000e_radio,
+        client_env_loss_db=0.0,
+    )
+    assert res_outdoor.ok is True and res_outdoor.value is not None
+    outdoor_route = res_outdoor.value
+    assert outdoor_route.total_hops == 3
+
+    # Leg 0 (origin -> rep1) loses exactly 6.0 dB in both directions inside vehicle cabin:
+    assert outdoor_route.legs[0].forward_margin_db - route.legs[0].forward_margin_db == pytest.approx(
+        cabin_loss_db, abs=0.05
+    )
+    assert outdoor_route.legs[0].reverse_margin_db - route.legs[0].reverse_margin_db == pytest.approx(
+        cabin_loss_db, abs=0.05
+    )
+    # Leg 1 (rep1 -> rep2) and Leg 2 (rep2 -> fixed destination) suffer 0.0 dB vehicle cabin loss:
+    assert route.legs[1].forward_margin_db == outdoor_route.legs[1].forward_margin_db
+    assert route.legs[1].reverse_margin_db == outdoor_route.legs[1].reverse_margin_db
+    assert route.legs[2].forward_margin_db == outdoor_route.legs[2].forward_margin_db
+    assert route.legs[2].reverse_margin_db == outdoor_route.legs[2].reverse_margin_db
+
+
+def test_find_optimal_mesh_route_rejects_alligator_summit_for_civic_relay() -> None:
+    """Verify alligator 28 dBm high-noise commercial tower (downlink passes, client uplink fails) is rejected for civic relay."""
+    origin = SiteCandidate(
+        site_id="VT-CLIENT-01",
+        name="Valley Pocket Tracker in Vehicle",
+        location=Coordinate(lat=44.4759, lon=-73.2121, elevation_m=70.0),
+        site_type=SiteType.CUSTOM,
+        mast_height_m=1.5,
+    )
+    destination = SiteCandidate(
+        site_id="VT-DEST-01",
+        name="East Valley Emergency Ops",
+        location=Coordinate(lat=44.4759, lon=-72.9621, elevation_m=80.0),
+        site_type=SiteType.BUILDING_ROOFTOP,
+        mast_height_m=8.0,
+    )
+    alligator_tower = SiteCandidate(
+        site_id="VT-ALLIGATOR-01",
+        name="Noisy Commercial Summit Tower",
+        location=Coordinate(lat=44.5659, lon=-73.0871, elevation_m=900.0),
+        site_type=SiteType.COMMUNICATIONS_TOWER,
+        mast_height_m=20.0,
+    )
+    civic_relay = SiteCandidate(
+        site_id="VT-CIVIC-01",
+        name="Municipal South Ridge Water Tower",
+        location=Coordinate(lat=44.3859, lon=-73.0871, elevation_m=300.0),
+        site_type=SiteType.WATER_TOWER,
+        mast_height_m=15.0,
+    )
+
+    def valley_and_spur_terrain(lat: float, lon: float) -> float:
+        # 1. Central valley massif blocks direct origin <-> destination (lat == 44.4759)
+        if 44.468 < lat < 44.484 and -73.18 < lon < -73.00:
+            return 2500.0
+        # 2. Northern foothill spur (~20 dB diffraction) on origin -> alligator_tower:
+        #    28 dBm tower downlink passes (+20.6 dB >= 3.0 dB), while 20 dBm cabin client uplink
+        #    into 12 dB co-site commercial broadcast noise fails (+0.6 dB < 3.0 dB)!
+        if 44.518 < lat < 44.524 and lon < -73.12:
+            return 547.0
+        # 3. Slightly stronger southern knoll (~22.5 dB diffraction) gives civic_relay slightly higher path loss
+        #    than alligator_tower (so naive symmetric routing picks alligator_tower), yet quiet 1 dB noise floor
+        #    allows civic_relay to close TWO_WAY (+7.6 dB >= 3.0 dB)!
+        if 44.428 < lat < 44.434 and lon < -73.12:
+            return 262.5
+        return 90.0
+
+    g2_prof = resolve_site_radio_profile(
+        site_type=alligator_tower.site_type,
+        hardware_id="STATION_G2_BACKBONE",
+        protocol_id="MESHTASTIC_LONGFAST",
+        season_id="SUMMER_FOLIAGE",
+        noise_override_db=12.0,
+    ).value
+    civic_prof = resolve_site_radio_profile(
+        site_type=civic_relay.site_type,
+        hardware_id="RAK4631_SOLAR",
+        protocol_id="MESHTASTIC_LONGFAST",
+        season_id="SUMMER_FOLIAGE",
+    ).value
+    t1000e_radio = build_radio_config("SENSECAP_T1000E", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+    assert g2_prof is not None and civic_prof is not None and t1000e_radio is not None
+    cabin_loss_db = CLIENT_ENVIRONMENT_PROFILES["VEHICLE_CABIN"].clutter_loss_db
+
+    # 1. Legacy symmetric routing (assuming uniform 28 dBm G2 radios everywhere) falls for the alligator summit:
+    sym_res = find_optimal_mesh_route(
+        origin=origin,
+        destination=destination,
+        candidate_repeaters=[alligator_tower, civic_relay],
+        radio=g2_prof.radio,
+        elevation_fn=valley_and_spur_terrain,
+        max_hops=3,
+        min_link_margin_db=3.0,
+    )
+    assert sym_res.ok is True and sym_res.value is not None
+    assert sym_res.value.route_found is True
+    assert sym_res.value.intermediate_node_ids == ["VT-ALLIGATOR-01"]
+
+    # 2. Verify alligator_tower alone fails asymmetric two-way routing (tower downlink passes, client uplink fails):
+    alligator_only_res = find_optimal_mesh_route(
+        origin=origin,
+        destination=destination,
+        candidate_repeaters=[alligator_tower],
+        radio=civic_prof.radio,
+        elevation_fn=valley_and_spur_terrain,
+        max_hops=3,
+        min_link_margin_db=3.0,
+        origin_client_radio=t1000e_radio,
+        client_env_loss_db=cabin_loss_db,
+        site_profiles={alligator_tower.site_id: g2_prof},
+    )
+    assert alligator_only_res.ok is True and alligator_only_res.value is not None
+    assert alligator_only_res.value.route_found is False
+
+    # Confirm via direct 1-hop route from alligator_tower -> origin that downlink passes >= 3.0 dB while uplink < 3.0 dB:
+    probe_res = find_optimal_mesh_route(
+        origin=alligator_tower,
+        destination=origin,
+        candidate_repeaters=[],
+        max_hops=1,
+        min_link_margin_db=3.0,
+        destination_client_radio=t1000e_radio,
+        client_env_loss_db=cabin_loss_db,
+        site_profiles={alligator_tower.site_id: g2_prof},
+        elevation_fn=valley_and_spur_terrain,
+    )
+    assert probe_res.ok is True and probe_res.value is not None
+    assert probe_res.value.route_found is False
+    # Bottleneck margin is the failed client uplink (< 3.0 dB), whereas 20 dB stronger tower downlink passes (>= 3.0 dB)
+    assert probe_res.value.bottleneck_margin_db < 3.0
+    assert probe_res.value.bottleneck_margin_db + 20.0 >= 3.0
+
+    # 3. With both repeaters available, asymmetric routing deterministically rejects alligator_tower and selects civic_relay:
+    asym_res = find_optimal_mesh_route(
+        origin=origin,
+        destination=destination,
+        candidate_repeaters=[alligator_tower, civic_relay],
+        radio=civic_prof.radio,
+        elevation_fn=valley_and_spur_terrain,
+        max_hops=3,
+        min_link_margin_db=3.0,
+        origin_client_radio=t1000e_radio,
+        client_env_loss_db=cabin_loss_db,
+        site_profiles={
+            alligator_tower.site_id: g2_prof,
+            civic_relay.site_id: civic_prof,
+        },
+    )
+    assert asym_res.ok is True and asym_res.value is not None
+    asym_route = asym_res.value
+    assert asym_route.route_found is True
+    assert asym_route.total_hops == 2
+    assert asym_route.intermediate_node_ids == ["VT-CIVIC-01"]
+    assert len(asym_route.legs) == 2
+    for leg in asym_route.legs:
+        assert leg.reachability_state == ReachabilityState.TWO_WAY
+        assert leg.forward_margin_db is not None and leg.reverse_margin_db is not None
+        assert min(leg.forward_margin_db, leg.reverse_margin_db) >= 3.0
+
+
+def test_find_optimal_mesh_route_destination_client_and_negative_loss_guard() -> None:
+    """Verify destination_client_radio uses 0 dB noise penalty and negative client_env_loss_db returns Result.fail."""
+    hub = SiteCandidate(
+        site_id="VT-HUB-01",
+        name="Summit Hub Repeater",
+        location=Coordinate(lat=44.5437, lon=-72.8143, elevation_m=800.0),
+        site_type=SiteType.COMMUNICATIONS_TOWER,
+        mast_height_m=20.0,
+    )
+    dest_client = SiteCandidate(
+        site_id="VT-HIKER-01",
+        name="Trailhead Pocket Tracker",
+        location=Coordinate(lat=44.5000, lon=-72.8500, elevation_m=250.0),
+        site_type=SiteType.COMMUNICATIONS_TOWER,  # even if mislabeled noisy, client radio overrides noise to 0.0 dB
+        mast_height_m=1.5,
+    )
+
+    g2_prof = resolve_site_radio_profile(
+        site_type=hub.site_type,
+        hardware_id="STATION_G2_BACKBONE",
+        protocol_id="MESHTASTIC_LONGFAST",
+        season_id="WINTER_DORMANT",
+    ).value
+    t1000e_radio = build_radio_config("SENSECAP_T1000E", "MESHTASTIC_LONGFAST", "WINTER_LEAF_OFF").value
+    assert g2_prof is not None and t1000e_radio is not None
+
+    bad_res = find_optimal_mesh_route(
+        origin=hub,
+        destination=dest_client,
+        candidate_repeaters=[],
+        destination_client_radio=t1000e_radio,
+        client_env_loss_db=-2.0,
+    )
+    assert bad_res.ok is False
+    assert bad_res.error is not None
+    assert bad_res.error.code == "INVALID_LOSS_PENALTY"
+
+    ok_res = find_optimal_mesh_route(
+        origin=hub,
+        destination=dest_client,
+        candidate_repeaters=[],
+        elevation_fn=lambda lat, lon: 150.0,
+        destination_client_radio=t1000e_radio,
+        client_env_loss_db=4.0,
+        site_profiles={hub.site_id: g2_prof},
+    )
+    assert ok_res.ok is True and ok_res.value is not None
+    assert ok_res.value.route_found is True
+    assert ok_res.value.total_hops == 1
+    leg = ok_res.value.legs[0]
+    assert leg.forward_margin_db is not None and leg.reverse_margin_db is not None
+    assert leg.reachability_state == ReachabilityState.TWO_WAY
+    # Hub (28 dBm, 6 dB noise) -> Client (20 dBm, 0 dB noise): forward - reverse == (28 - 20) + (6 - 0) == +14.0 dB
+    assert leg.forward_margin_db - leg.reverse_margin_db == pytest.approx(14.0, abs=0.05)

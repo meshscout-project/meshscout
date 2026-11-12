@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import pytest
 
-from meshscout.core.contracts import Coordinate, SiteCandidate, SiteType
+from meshscout.core.contracts import Coordinate, ReachabilityState, SiteCandidate, SiteType
+from meshscout.core.presets import build_radio_config
 from meshscout.core.registry import (
     DeploymentStatus,
     LivingMeshRegistry,
@@ -293,4 +294,106 @@ def test_insert_custom_node(tmp_path: Path) -> None:
 
     nodes = registry.list_nodes()
     assert any(n.site_id == "CUSTOM-USER-01" for n in nodes)
+
+
+def test_evaluate_home_node_reach_legacy_none_defaults() -> None:
+    """Verify legacy evaluate_home_node_reach without client_radio leaves directional fields None."""
+    home = Coordinate(lat=44.4906, lon=-73.1112, elevation_m=108.0)
+    nodes = [
+        RegisteredNode(
+            site_id="VT-ESX-WT",
+            name="Essex Water Tower",
+            coordinate=Coordinate(lat=44.5021, lon=-73.0985, elevation_m=152.0),
+            height_agl_m=25.0,
+            site_type=SiteType.WATER_TOWER,
+            status=DeploymentStatus.ACTIVE_ON_AIR,
+            hardware_preset="RAK4631_SOLAR",
+            updated_at="2026-11-01T00:00:00Z",
+        )
+    ]
+
+    res = evaluate_home_node_reach(home_coord=home, home_height_agl_m=6.0, nodes=nodes)
+    assert res.ok and res.value is not None
+    assert len(res.value.ranked_towers) == 1
+    item = res.value.ranked_towers[0]
+    assert item.uplink_margin_db is None
+    assert item.downlink_margin_db is None
+    assert item.reachability_state is None
+
+
+def test_evaluate_home_node_reach_per_node_preset_and_two_way_over_alligator_ranking() -> None:
+    """Verify per-node hardware_preset resolution and TWO_WAY ranking ahead of HEAR_ONLY_ALLIGATOR."""
+    home = Coordinate(lat=44.4759, lon=-73.2121, elevation_m=100.0)
+    client_radio = build_radio_config(
+        hardware_id="SENSECAP_T1000E",
+        protocol_id="MESHTASTIC_LONGFAST",
+        season_id="SUMMER_LEAF_ON",
+    ).value
+    assert client_radio is not None
+
+    nodes = [
+        RegisteredNode(
+            site_id="VT-ALLIGATOR-COMM",
+            name="Distant Commercial Backbone Tower",
+            coordinate=Coordinate(lat=44.7909, lon=-73.2121, elevation_m=450.0),
+            height_agl_m=30.0,
+            site_type=SiteType.COMMUNICATIONS_TOWER,
+            status=DeploymentStatus.ACTIVE_ON_AIR,
+            hardware_preset="STATION_G2_BACKBONE",
+            updated_at="2026-11-01T00:00:00Z",
+        ),
+        RegisteredNode(
+            site_id="VT-LOCAL-CIVIC",
+            name="Local Municipal Water Tower",
+            coordinate=Coordinate(lat=44.5029, lon=-73.2121, elevation_m=140.0),
+            height_agl_m=25.0,
+            site_type=SiteType.WATER_TOWER,
+            status=DeploymentStatus.CANDIDATE,
+            hardware_preset="RAK4631_SOLAR",
+            updated_at="2026-11-01T00:00:00Z",
+        ),
+    ]
+
+    res = evaluate_home_node_reach(
+        home_coord=home,
+        home_height_agl_m=2.0,
+        nodes=nodes,
+        elevation_fn=lambda lat, lon: 100.0,
+        client_radio=client_radio,
+        client_env_loss_db=30.0,
+        protocol_id="MESHTASTIC_LONGFAST",
+        season_id="SUMMER_FOLIAGE",
+    )
+    assert res.ok and res.value is not None
+    report = res.value
+    assert len(report.ranked_towers) == 2
+
+    top_item = report.ranked_towers[0]
+    second_item = report.ranked_towers[1]
+
+    # Candidate civic TWO_WAY tower ranks ahead of ACTIVE_ON_AIR HEAR_ONLY_ALLIGATOR comm tower
+    assert top_item.site_id == "VT-LOCAL-CIVIC"
+    assert top_item.recommended_rank == 1
+    assert top_item.reachability_state == ReachabilityState.TWO_WAY
+    assert top_item.downlink_margin_db is not None and top_item.uplink_margin_db is not None
+    assert top_item.downlink_margin_db >= 0.0 and top_item.uplink_margin_db >= 0.0
+    # RAK4631_SOLAR (22 dBm) vs SENSECAP_T1000E (20 dBm) + WATER_TOWER noise (1.0 dB) => 3.0 dB asymmetry
+    assert round(top_item.downlink_margin_db - top_item.uplink_margin_db, 4) == pytest.approx(3.0)
+
+    assert second_item.site_id == "VT-ALLIGATOR-COMM"
+    assert second_item.recommended_rank == 2
+    assert second_item.reachability_state == ReachabilityState.HEAR_ONLY_ALLIGATOR
+    assert second_item.downlink_margin_db is not None and second_item.uplink_margin_db is not None
+    assert second_item.downlink_margin_db >= 0.0
+    assert second_item.uplink_margin_db < 0.0
+    assert second_item.link_margin_db == pytest.approx(second_item.uplink_margin_db)
+    # STATION_G2_BACKBONE (28 dBm) vs SENSECAP_T1000E (20 dBm) + COMMUNICATIONS_TOWER noise (6.0 dB) => 14.0 dB asymmetry
+    assert round(second_item.downlink_margin_db - second_item.uplink_margin_db, 4) == pytest.approx(14.0)
+
+    # Reachable counts only include TWO_WAY towers (alligator active tower is excluded)
+    assert report.reachable_active_count == 0
+    assert report.reachable_candidate_count == 1
+    assert report.best_azimuth_deg == pytest.approx(top_item.azimuth_deg)
+    assert report.best_cardinal_direction == top_item.cardinal_direction
+
 

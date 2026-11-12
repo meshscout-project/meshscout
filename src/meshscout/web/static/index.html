@@ -43,6 +43,92 @@
       justify-content: space-between;
       align-items: center;
     }
+    .client-eval-strip {
+      background-color: var(--bg-panel);
+    }
+    .client-eval-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .client-eval-grid .brutal-select {
+      width: 100%;
+    }
+    .viewshed-direction-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 1px 5px;
+      background-color: var(--bg-input);
+      border: 1px solid var(--border-strong);
+    }
+    .viewshed-dir-label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .viewshed-dir-select {
+      border: none;
+      padding: 2px 4px;
+      font-size: 10px;
+      background-color: transparent;
+    }
+    .reach-badge {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      padding: 1px 5px;
+      border: 1px solid var(--border-strong);
+      text-transform: uppercase;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+    .reach-badge-two-way {
+      background-color: var(--accent-emerald-dim);
+      color: var(--accent-emerald);
+      border-color: var(--border-accent);
+    }
+    .reach-badge-alligator {
+      background-color: oklch(0.27 0.08 var(--amber-hue));
+      color: var(--accent-amber);
+      border-color: var(--accent-amber);
+    }
+    .reach-badge-uplink-only {
+      background-color: oklch(0.25 0.06 var(--cyan-hue));
+      color: var(--accent-cyan);
+      border-color: var(--accent-cyan);
+    }
+    .reach-badge-unreachable {
+      background-color: oklch(0.26 0.08 var(--danger-hue));
+      color: var(--accent-danger);
+      border-color: var(--accent-danger);
+    }
+    .dir-margin-pair {
+      margin-top: 2px;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .dir-margin-pair .dir-sep {
+      color: var(--text-muted);
+      margin: 0 2px;
+    }
+    .backhaul-preset-select {
+      max-width: 145px;
+      padding: 3px 5px;
+      font-size: 10px;
+    }
+    #mast-clearance-indicator {
+      gap: 6px;
+    }
   </style>
 </head>
 <body>
@@ -194,6 +280,14 @@
                   <button id="map-mode-tiles-btn" type="button" class="brutal-btn btn-xs map-seg-btn" title="Online OpenStreetMap Street Tiles (Requires internet)">
                     Street Map
                   </button>
+                </div>
+                <div class="viewshed-direction-group" role="group" aria-label="Viewshed Propagation Direction">
+                  <label for="viewshed-direction-select" class="viewshed-dir-label">VIEWSHED</label>
+                  <select id="viewshed-direction-select" class="brutal-select viewshed-dir-select" title="Select directional propagation footprint for 360-degree viewshed">
+                    <option value="downlink" selected>DL (Tower -&gt; Client)</option>
+                    <option value="uplink">UL (Client -&gt; Tower)</option>
+                    <option value="two_way">Two-Way (Bidirectional)</option>
+                  </select>
                 </div>
                 <button id="reset-view-btn" type="button" class="brutal-btn btn-xs">
                   Center Home
@@ -529,6 +623,14 @@
                 <span class="tel-label">Fade Margin</span>
                 <span class="tel-val" id="tel-margin">-- dB</span>
               </div>
+              <div class="tel-cell" id="tel-dir-margins-cell" title="Directional RF Link Margins (Downlink / Uplink or Node A <-> Node B)">
+                <span class="tel-label" id="tel-dir-margins-label">DL / UL Margin</span>
+                <span class="tel-val" id="tel-dir-margins">--</span>
+              </div>
+              <div class="tel-cell" id="tel-reachability-cell" title="Bidirectional Link Closure State">
+                <span class="tel-label">Link State</span>
+                <span class="tel-val" id="tel-reachability">--</span>
+              </div>
               <div class="tel-cell">
                 <span class="tel-label">60% Fresnel Clear</span>
                 <span class="tel-val" id="tel-fresnel-clear">--</span>
@@ -557,6 +659,7 @@
               <input type="range" id="target-mast-slider" class="brutal-slider" min="3" max="45" step="1" value="5" />
             </div>
             <div class="mast-clearance-indicator" id="mast-clearance-indicator">
+              <span class="telemetry-badge reach-badge" id="fresnel-reachability-badge" style="display: none;">TWO-WAY</span>
               <span class="telemetry-badge badge-fresnel-clear" id="fresnel-dynamic-badge">60% FRESNEL CLEAR</span>
             </div>
           </div>
@@ -568,6 +671,13 @@
               <label for="backhaul-node-a" class="backhaul-label">NODE A (ORIGIN):</label>
               <div class="select-with-pick-row">
                 <select id="backhaul-node-a" class="brutal-select backhaul-select" aria-label="Node A (Origin Site)"></select>
+                <select id="backhaul-preset-a" class="brutal-select backhaul-preset-select" aria-label="Node A Hardware Preset" title="Optional hardware preset override for Node A">
+                  <option value="" selected>Workspace HW</option>
+                  <option value="STATION_G2_BACKBONE">Station G2</option>
+                  <option value="RAK4631_SOLAR">RAK4631 Solar</option>
+                  <option value="HELTEC_V3_HOME">Heltec V3</option>
+                  <option value="SENSECAP_T1000E">SenseCAP T1000-E</option>
+                </select>
                 <button type="button" id="backhaul-pick-a-btn" class="brutal-btn btn-xs backhaul-pick-btn" title="Pick Node A directly from the map">🎯 Map Pick</button>
               </div>
             </div>
@@ -584,6 +694,13 @@
               <label for="backhaul-node-b" class="backhaul-label">NODE B (TARGET):</label>
               <div class="select-with-pick-row">
                 <select id="backhaul-node-b" class="brutal-select backhaul-select" aria-label="Node B (Target Site)"></select>
+                <select id="backhaul-preset-b" class="brutal-select backhaul-preset-select" aria-label="Node B Hardware Preset" title="Optional hardware preset override for Node B">
+                  <option value="" selected>Workspace HW</option>
+                  <option value="STATION_G2_BACKBONE">Station G2</option>
+                  <option value="RAK4631_SOLAR">RAK4631 Solar</option>
+                  <option value="HELTEC_V3_HOME">Heltec V3</option>
+                  <option value="SENSECAP_T1000E">SenseCAP T1000-E</option>
+                </select>
                 <button type="button" id="backhaul-pick-b-btn" class="brutal-btn btn-xs backhaul-pick-btn" title="Pick Node B directly from the map">🎯 Map Pick</button>
               </div>
             </div>
@@ -776,6 +893,32 @@
             </div>
           </div>
 
+          <div class="control-strip client-eval-strip" role="group" aria-label="Client Device and Operating Environment">
+            <div class="client-eval-grid">
+              <div class="preset-field">
+                <label for="client-preset-select">CLIENT DEVICE PRESET</label>
+                <select id="client-preset-select" class="brutal-select" title="Client endpoint radio hardware for asymmetric uplink/downlink evaluation">
+                  <option value="SENSECAP_T1000E" selected>SenseCAP T1000-E (20dBm / 1.5dBi)</option>
+                  <option value="HELTEC_V3_HOME">Heltec V3 Home (22dBm / 3.0dBi)</option>
+                  <option value="RAK4631_SOLAR">RAK4631 Solar (22dBm / 5.8dBi)</option>
+                  <option value="STATION_G2_BACKBONE">Station G2 Backbone (28dBm / 8.0dBi)</option>
+                  <option value="MIRROR_HEADER">Mirror Header Preset</option>
+                  <option value="">Legacy Symmetric (No Clutter)</option>
+                </select>
+              </div>
+              <div class="preset-field">
+                <label for="client-env-select">CLIENT ENVIRONMENT</label>
+                <select id="client-env-select" class="brutal-select" title="Local near-field clutter attenuation at client endpoint">
+                  <option value="OUTDOOR_CLEAR" selected>Outdoor Clear (0.0 dB / 1.5m)</option>
+                  <option value="BODY_WORN_POCKET">Body-Worn / Pocket (-4.0 dB / 1.2m)</option>
+                  <option value="VEHICLE_CABIN">Vehicle Cabin (-6.0 dB / 1.5m)</option>
+                  <option value="INDOOR_WINDOW">Indoor Window (-8.0 dB / 2.0m)</option>
+                  <option value="ROOFTOP_MAST">Rooftop Mast (0.0 dB / 6.0m)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           <div class="control-strip">
             <div class="slider-header">
               <label for="home-agl-slider">HOME ANTENNA HEIGHT AGL (MAST / ROOFTOP)</label>
@@ -785,9 +928,9 @@
               <input
                 id="home-agl-slider"
                 type="range"
-                min="2"
+                min="1"
                 max="25"
-                step="0.5"
+                step="0.1"
                 value="8.0"
                 class="brutal-slider"
               />

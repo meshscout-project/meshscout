@@ -90,10 +90,13 @@ from meshscout.core.archetypes import (
 from meshscout.core.contracts import (
     AccessDifficulty,
     Coordinate,
+    ElevationPoint,
+    ElevationProfile,
     RadioConfig,
     RegionalBounds,
     Result,
     SiteCandidate,
+    SiteRadioProfile,
     SiteType,
 )
 from meshscout.core.composite_viewshed import (
@@ -129,11 +132,14 @@ from meshscout.core.traffic import (
 )
 from meshscout.core.viewshed import compute_radial_viewshed_polygon
 from meshscout.core.presets import (
+    CLIENT_ENVIRONMENT_PROFILES,
     HARDWARE_PRESETS,
     PROTOCOL_PROFILES,
     SEASONAL_PROFILES,
     build_radio_config,
+    get_site_noise_penalty_db,
     list_all_presets,
+    resolve_site_radio_profile,
 )
 from meshscout.core.registry import (
     DeploymentStatus,
@@ -169,6 +175,7 @@ from meshscout.core.tower_registry import (
     resolve_friction_tier,
 )
 from meshscout.core.viewshed import (
+    VALID_DIRECTIONS,
     ViewshedResult,
     compute_viewshed,
     generate_target_grid,
@@ -230,6 +237,11 @@ class LinkEvaluationRequest(BaseModel):
     home_lat: Optional[float] = None
     home_lon: Optional[float] = None
     home_elev_m: Optional[float] = None
+    evaluation_mode: Optional[str] = None
+    source_preset: Optional[str] = None
+    target_preset: Optional[str] = None
+    client_preset: Optional[str] = None
+    client_env: Optional[str] = None
 
 
 EvaluateLinkRequest = LinkEvaluationRequest
@@ -246,6 +258,9 @@ class HomeCheckRequest(BaseModel):
     protocol_profile: Optional[str] = None
     season_profile: Optional[str] = None
     persist_height: bool = True
+    client_preset: Optional[str] = None
+    client_env: Optional[str] = None
+    direction: Optional[str] = None
 
 
 class OptimizeBackboneRequest(BaseModel):
@@ -325,6 +340,9 @@ class ViewshedRequest(BaseModel):
     season_profile: Optional[str] = None
     num_radials: int = 72
     max_range_km: float = 60.0
+    client_preset: Optional[str] = None
+    client_env: Optional[str] = None
+    direction: str = "downlink"
 
 
 class MeshRouteRequest(BaseModel):
@@ -337,6 +355,10 @@ class MeshRouteRequest(BaseModel):
     hardware_preset: Optional[str] = None
     protocol_profile: Optional[str] = None
     season_profile: Optional[str] = None
+    origin_client_preset: Optional[str] = None
+    destination_client_preset: Optional[str] = None
+    client_env: Optional[str] = None
+    site_presets: Optional[Dict[str, str]] = None
 
 
 class CustomSiteRequest(BaseModel):
@@ -395,6 +417,10 @@ class CorridorEvaluationRequest(BaseModel):
     custom_sites: List[SiteCandidate] = Field(default_factory=list)
     frequency_mhz: float = Field(default=915.0, ge=100.0, le=6000.0)
     tx_power_dbm: float = Field(default=20.0, ge=0.0, le=35.0)
+    site_presets: Optional[Dict[str, str]] = None
+    protocol_profile: Optional[str] = None
+    season_profile: Optional[str] = None
+    asymmetric: bool = False
 
 
 class ProvisionSiteRequest(BaseModel):
@@ -458,6 +484,12 @@ class CompositeViewshedRequest(BaseModel):
     include_active_nodes: bool = Field(default=False)
     max_range_km: float = Field(default=60.0, ge=5.0, le=150.0)
     num_radials: int = Field(default=72, ge=16, le=360)
+    client_preset: Optional[str] = None
+    client_env: Optional[str] = None
+    direction: str = "downlink"
+    site_presets: Optional[Dict[str, str]] = None
+    protocol_profile: Optional[str] = None
+    season_profile: Optional[str] = None
 
 
 class SampleElevationRequest(BaseModel):
@@ -930,6 +962,17 @@ def _fallback_portable_workbench_html(
 
     reach_rows = []
     for t in home_report.get("ranked_towers", [])[:15]:
+        dl_m = t.get("downlink_margin_db")
+        ul_m = t.get("uplink_margin_db")
+        r_state = t.get("reachability_state")
+        if dl_m is not None and ul_m is not None:
+            state_suffix = f" [{html.escape(str(r_state)).upper()}]" if r_state else ""
+            margin_cell = (
+                f"{float(t['link_margin_db']):.1f} dB "
+                f"(DL {float(dl_m):.1f} / UL {float(ul_m):.1f}){state_suffix}"
+            )
+        else:
+            margin_cell = f"{float(t['link_margin_db']):.1f} dB"
         reach_rows.append(
             f"<tr>"
             f"<td>#{t['recommended_rank']}</td>"
@@ -938,7 +981,7 @@ def _fallback_portable_workbench_html(
             f"<td>{float(t['azimuth_deg']):.1f}&deg; ({html.escape(str(t['cardinal_direction']))})</td>"
             f"<td>{float(t['distance_km']):.2f} km</td>"
             f"<td>{float(t['rx_power_dbm']):.1f} dBm</td>"
-            f"<td>{float(t['link_margin_db']):.1f} dB</td>"
+            f"<td>{margin_cell}</td>"
             f"<td>{'CLEAR' if t['has_line_of_sight'] else 'GRAZING/NLOS'}</td>"
             f"</tr>"
         )
@@ -2150,6 +2193,26 @@ def create_web_app(
         prefs = registry.get_preferences()
         nodes_by_id = {n.site_id: n for n in registry.list_nodes()}
 
+        raw_mode: Optional[str] = None
+        if req.evaluation_mode is not None:
+            mode_clean = req.evaluation_mode.strip().lower()
+            if mode_clean not in ("client", "backhaul"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid evaluation_mode '{req.evaluation_mode}'. Expected 'client' or 'backhaul'.",
+                )
+            raw_mode = mode_clean
+
+        has_client_fields = req.client_preset is not None or req.client_env is not None
+        has_backhaul_fields = req.source_preset is not None or req.target_preset is not None
+
+        if raw_mode == "client" or (raw_mode is None and has_client_fields):
+            effective_mode: Optional[str] = "client"
+        elif raw_mode == "backhaul" or (raw_mode is None and has_backhaul_fields):
+            effective_mode = "backhaul"
+        else:
+            effective_mode = None
+
         hw_id = (req.hardware_preset or prefs.hardware_preset).strip().upper()
         proto_id = (req.protocol_profile or prefs.protocol_profile).strip().upper()
         season_id = (req.season_profile or prefs.season_profile).strip().upper()
@@ -2212,6 +2275,16 @@ def create_web_app(
             nodes_by_id=nodes_by_id,
         )
 
+        def _resolve_site_hw_id(explicit_preset: Optional[str], site: SiteCandidate) -> str:
+            if explicit_preset is not None:
+                return explicit_preset.strip().upper()
+            reg_node = nodes_by_id.get(site.site_id)
+            if reg_node is not None and reg_node.hardware_preset:
+                cand_hw = reg_node.hardware_preset.strip().upper()
+                if cand_hw in HARDWARE_PRESETS:
+                    return cand_hw
+            return hw_id
+
         min_lat = min(source_site.location.lat, target_site.location.lat) - 0.05
         max_lat = max(source_site.location.lat, target_site.location.lat) + 0.05
         min_lon = min(source_site.location.lon, target_site.location.lon) - 0.05
@@ -2241,15 +2314,164 @@ def create_web_app(
             profile=profile,
             frequency_mhz=radio.frequency_mhz,
         )
-        itm_res = evaluate_point_to_point_link(
-            profile=profile,
-            radio=radio,
-        )
         if not fresnel_res.ok or fresnel_res.value is None:
             raise HTTPException(
                 status_code=400,
                 detail=fresnel_res.error.message if fresnel_res.error else "Fresnel analysis failed",
             )
+
+        resolved_source_preset: Optional[str] = None
+        resolved_target_preset: Optional[str] = None
+        resolved_client_preset: Optional[str] = None
+        resolved_client_env: Optional[str] = None
+        active_radio_out = radio
+
+        if effective_mode is None:
+            itm_res = evaluate_point_to_point_link(
+                profile=profile,
+                radio=radio,
+            )
+        elif effective_mode == "client":
+            client_hw_id = (
+                req.client_preset
+                or req.source_preset
+                or req.hardware_preset
+                or prefs.hardware_preset
+            ).strip().upper()
+            client_radio_res = build_radio_config(
+                hardware_id=client_hw_id,
+                protocol_id=proto_id,
+                season_id=season_id,
+            )
+            if not client_radio_res.ok or client_radio_res.value is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        client_radio_res.error.message
+                        if client_radio_res.error
+                        else "Invalid client radio preset"
+                    ),
+                )
+            client_radio = client_radio_res.value
+
+            raw_env = req.client_env if req.client_env is not None else "OUTDOOR_CLEAR"
+            env_key = raw_env.strip().upper()
+            if env_key not in CLIENT_ENVIRONMENT_PROFILES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Unknown client_env '{req.client_env}'. "
+                        f"Available: {sorted(CLIENT_ENVIRONMENT_PROFILES.keys())}"
+                    ),
+                )
+            env_profile = CLIENT_ENVIRONMENT_PROFILES[env_key]
+
+            tower_hw_id = _resolve_site_hw_id(req.target_preset, target_site)
+            tower_prof_res = resolve_site_radio_profile(
+                site_type=target_site.site_type,
+                hardware_id=tower_hw_id,
+                protocol_id=proto_id,
+                season_id=season_id,
+            )
+            if not tower_prof_res.ok or tower_prof_res.value is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        tower_prof_res.error.message
+                        if tower_prof_res.error
+                        else "Invalid target radio preset"
+                    ),
+                )
+            tower_profile = tower_prof_res.value
+
+            total_dist_m = profile.distance_km * 1000.0
+            reversed_points = [
+                ElevationPoint(
+                    distance_m=max(0.0, total_dist_m - pt.distance_m),
+                    elevation_m=pt.elevation_m,
+                    coordinate=pt.coordinate,
+                )
+                for pt in reversed(profile.points)
+            ]
+            tower_to_client_profile = ElevationProfile(
+                source_site=target_site,
+                target_site=source_site,
+                distance_km=profile.distance_km,
+                points=reversed_points,
+            )
+            itm_res = evaluate_point_to_point_link(
+                profile=tower_to_client_profile,
+                radio=tower_profile.radio,
+                target_radio=client_radio,
+                source_noise_penalty_db=tower_profile.noise_penalty_db,
+                target_noise_penalty_db=0.0,
+                client_env_loss_db=env_profile.clutter_loss_db,
+            )
+            if itm_res.ok and itm_res.value is not None:
+                itm_res = Result.success(
+                    itm_res.value.model_copy(
+                        update={
+                            "source_id": source_site.site_id,
+                            "target_id": target_site.site_id,
+                        }
+                    )
+                )
+            resolved_source_preset = client_hw_id
+            resolved_target_preset = tower_profile.hardware_preset
+            resolved_client_preset = client_hw_id
+            resolved_client_env = env_key
+            active_radio_out = client_radio
+        else:
+            src_hw_id = _resolve_site_hw_id(req.source_preset, source_site)
+            src_prof_res = resolve_site_radio_profile(
+                site_type=source_site.site_type,
+                hardware_id=src_hw_id,
+                protocol_id=proto_id,
+                season_id=season_id,
+            )
+            if not src_prof_res.ok or src_prof_res.value is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        src_prof_res.error.message
+                        if src_prof_res.error
+                        else "Invalid source radio preset"
+                    ),
+                )
+            src_prof = src_prof_res.value
+
+            tgt_hw_id = _resolve_site_hw_id(req.target_preset, target_site)
+            tgt_prof_res = resolve_site_radio_profile(
+                site_type=target_site.site_type,
+                hardware_id=tgt_hw_id,
+                protocol_id=proto_id,
+                season_id=season_id,
+            )
+            if not tgt_prof_res.ok or tgt_prof_res.value is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        tgt_prof_res.error.message
+                        if tgt_prof_res.error
+                        else "Invalid target radio preset"
+                    ),
+                )
+            tgt_prof = tgt_prof_res.value
+
+            itm_res = evaluate_point_to_point_link(
+                profile=profile,
+                radio=src_prof.radio,
+                target_radio=tgt_prof.radio,
+                source_noise_penalty_db=src_prof.noise_penalty_db,
+                target_noise_penalty_db=tgt_prof.noise_penalty_db,
+                client_env_loss_db=0.0,
+            )
+            resolved_source_preset = src_prof.hardware_preset
+            resolved_target_preset = tgt_prof.hardware_preset
+            resolved_client_preset = None
+            resolved_client_env = None
+            active_radio_out = src_prof.radio
+
         if not itm_res.ok or itm_res.value is None:
             raise HTTPException(
                 status_code=400,
@@ -2287,7 +2509,12 @@ def create_web_app(
             "hardware_preset": hw_id,
             "protocol_profile": proto_id,
             "season_profile": season_id,
-            "radio_config": radio.model_dump(mode="json"),
+            "evaluation_mode": effective_mode,
+            "source_preset": resolved_source_preset,
+            "target_preset": resolved_target_preset,
+            "client_preset": resolved_client_preset,
+            "client_env": resolved_client_env,
+            "radio_config": active_radio_out.model_dump(mode="json"),
             "link_budget": link.model_dump(mode="json"),
             "fresnel_analysis": {
                 "source_id": fresnel.source_id,
@@ -2312,6 +2539,13 @@ def create_web_app(
             prefs = registry.get_preferences()
             nodes_by_id = {n.site_id: n for n in registry.list_nodes()}
             req_obj = req or ViewshedRequest()
+
+            direction = req_obj.direction.strip().lower()
+            if direction not in VALID_DIRECTIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid viewshed direction '{req_obj.direction}'. Expected one of {VALID_DIRECTIONS}.",
+                )
 
             hw_id = (req_obj.hardware_preset or prefs.hardware_preset).strip().upper()
             proto_id = (req_obj.protocol_profile or prefs.protocol_profile).strip().upper()
@@ -2343,17 +2577,77 @@ def create_web_app(
             radials = min(max(req_obj.num_radials, 8), 720)
             max_range = min(max(req_obj.max_range_km, 1.0), 150.0)
 
-            res = await asyncio.to_thread(
-                compute_radial_viewshed_polygon,
-                origin=origin_site,
-                num_radials=radials,
-                max_range_km=max_range,
-                radio=radio,
-                elevation_fn=_synthetic_vermont_elevation_fn,
+            is_asymmetric_vs = (
+                req_obj.client_preset is not None
+                or req_obj.client_env is not None
+                or direction != "downlink"
             )
+
+            if not is_asymmetric_vs:
+                res = await asyncio.to_thread(
+                    compute_radial_viewshed_polygon,
+                    origin=origin_site,
+                    num_radials=radials,
+                    max_range_km=max_range,
+                    radio=radio,
+                    elevation_fn=_synthetic_vermont_elevation_fn,
+                )
+            else:
+                client_hw_id = (req_obj.client_preset or hw_id).strip().upper()
+                client_radio_res = build_radio_config(
+                    hardware_id=client_hw_id,
+                    protocol_id=proto_id,
+                    season_id=season_id,
+                )
+                if not client_radio_res.ok or client_radio_res.value is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            client_radio_res.error.message
+                            if client_radio_res.error
+                            else "Invalid client radio preset"
+                        ),
+                    )
+                client_radio = client_radio_res.value
+
+                if req_obj.client_env is not None:
+                    env_key = req_obj.client_env.strip().upper()
+                    if env_key not in CLIENT_ENVIRONMENT_PROFILES:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"Unknown client_env '{req_obj.client_env}'. "
+                                f"Available: {sorted(CLIENT_ENVIRONMENT_PROFILES.keys())}"
+                            ),
+                        )
+                    env_prof = CLIENT_ENVIRONMENT_PROFILES[env_key]
+                    client_env_loss_db = env_prof.clutter_loss_db
+                    client_rx_height_m = env_prof.default_agl_m
+                else:
+                    client_env_loss_db = 0.0
+                    client_rx_height_m = 2.0
+
+                site_noise_penalty_db = get_site_noise_penalty_db(origin_site.site_type)
+
+                res = await asyncio.to_thread(
+                    compute_radial_viewshed_polygon,
+                    origin=origin_site,
+                    num_radials=radials,
+                    max_range_km=max_range,
+                    radio=radio,
+                    elevation_fn=_synthetic_vermont_elevation_fn,
+                    client_radio=client_radio,
+                    client_rx_height_m=client_rx_height_m,
+                    client_env_loss_db=client_env_loss_db,
+                    site_noise_penalty_db=site_noise_penalty_db,
+                    direction=direction,
+                )
+
             if not res.ok or res.value is None:
+                err_code = res.error.code if res.error else ""
+                status_code = 400 if err_code == "INVALID_DIRECTION" else 500
                 raise HTTPException(
-                    status_code=500,
+                    status_code=status_code,
                     detail=res.error.message if res.error else "Radial viewshed calculation failed",
                 )
 
@@ -2371,6 +2665,18 @@ def create_web_app(
     ) -> Dict[str, Any]:
         async with _get_viewshed_semaphore():
             req_obj = req or CompositeViewshedRequest()
+
+            direction = (req_obj.direction or "downlink").strip().lower()
+            if direction not in VALID_DIRECTIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid direction '{req_obj.direction}'. Expected one of {VALID_DIRECTIONS}.",
+                )
+
+            all_nodes = registry.list_nodes()
+            nodes_by_id = {n.site_id: n for n in all_nodes}
+            nodes_upper = {nid.upper(): n for nid, n in nodes_by_id.items()}
+
             combined_candidates: List[SiteCandidate] = []
             seen_ids = set()
 
@@ -2380,7 +2686,6 @@ def create_web_app(
                     combined_candidates.append(cand)
 
             if req_obj.include_active_nodes:
-                all_nodes = registry.list_nodes()
                 for node in all_nodes:
                     if node.status == DeploymentStatus.ACTIVE_ON_AIR:
                         cand = _node_to_site_candidate(node, fixture_lookup)
@@ -2398,15 +2703,156 @@ def create_web_app(
             radials = min(max(req_obj.num_radials, 8), 720)
             max_range = min(max(req_obj.max_range_km, 1.0), 150.0)
 
-            res = await asyncio.to_thread(
-                compute_composite_viewshed,
-                origins=combined_candidates,
-                max_range_km=max_range,
-                num_radials=radials,
+            use_asymmetric_comp = (
+                direction != "downlink"
+                or bool(req_obj.client_preset)
+                or bool(req_obj.client_env)
+                or req_obj.site_presets is not None
             )
+            has_profile_overrides = (
+                req_obj.protocol_profile is not None
+                or req_obj.season_profile is not None
+            )
+
+            if not use_asymmetric_comp and not has_profile_overrides:
+                res = await asyncio.to_thread(
+                    compute_composite_viewshed,
+                    origins=combined_candidates,
+                    max_range_km=max_range,
+                    num_radials=radials,
+                )
+            else:
+                prefs = registry.get_preferences()
+                hw_id = prefs.hardware_preset.strip().upper()
+                proto_id = (req_obj.protocol_profile or prefs.protocol_profile).strip().upper()
+                season_id = (req_obj.season_profile or prefs.season_profile).strip().upper()
+
+                radio_res = build_radio_config(
+                    hardware_id=hw_id,
+                    protocol_id=proto_id,
+                    season_id=season_id,
+                )
+                if not radio_res.ok or radio_res.value is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            radio_res.error.message
+                            if radio_res.error
+                            else "Invalid radio preset or profile"
+                        ),
+                    )
+
+                if not use_asymmetric_comp:
+                    res = await asyncio.to_thread(
+                        compute_composite_viewshed,
+                        origins=combined_candidates,
+                        max_range_km=max_range,
+                        num_radials=radials,
+                        radio_config=radio_res.value,
+                    )
+                else:
+                    client_hw_id = (req_obj.client_preset or hw_id).strip().upper()
+                    client_radio_res = build_radio_config(
+                        hardware_id=client_hw_id,
+                        protocol_id=proto_id,
+                        season_id=season_id,
+                    )
+                    if not client_radio_res.ok or client_radio_res.value is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                client_radio_res.error.message
+                                if client_radio_res.error
+                                else "Invalid client radio preset"
+                            ),
+                        )
+                    client_radio = client_radio_res.value
+
+                    if req_obj.client_env is not None:
+                        env_key = req_obj.client_env.strip().upper()
+                        if env_key not in CLIENT_ENVIRONMENT_PROFILES:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    f"Unknown client_env '{req_obj.client_env}'. "
+                                    f"Available: {sorted(CLIENT_ENVIRONMENT_PROFILES.keys())}"
+                                ),
+                            )
+                        env_prof = CLIENT_ENVIRONMENT_PROFILES[env_key]
+                        client_env_loss_db = env_prof.clutter_loss_db
+                        client_rx_height_m = env_prof.default_agl_m
+                    else:
+                        client_env_loss_db = 0.0
+                        client_rx_height_m = 2.0
+
+                    presets_exact: Dict[str, str] = {}
+                    presets_upper: Dict[str, str] = {}
+                    for raw_sid, raw_hw in (req_obj.site_presets or {}).items():
+                        sid_k = raw_sid.strip()
+                        hw_v = (raw_hw or "").strip().upper()
+                        chk = build_radio_config(
+                            hardware_id=hw_v,
+                            protocol_id=proto_id,
+                            season_id=season_id,
+                        )
+                        if not chk.ok or chk.value is None:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    chk.error.message
+                                    if chk.error
+                                    else f"Invalid site preset '{raw_hw}' for '{raw_sid}'"
+                                ),
+                            )
+                        presets_exact[sid_k] = hw_v
+                        presets_upper[sid_k.upper()] = hw_v
+
+                    site_profiles: Dict[str, SiteRadioProfile] = {}
+                    for cand in combined_candidates:
+                        reg_node = nodes_by_id.get(cand.site_id) or nodes_upper.get(
+                            cand.site_id.upper()
+                        )
+                        cand_hw = (
+                            presets_exact.get(cand.site_id)
+                            or presets_upper.get(cand.site_id.upper())
+                            or (reg_node.hardware_preset if reg_node and reg_node.hardware_preset else None)
+                            or hw_id
+                        )
+                        prof_res = resolve_site_radio_profile(
+                            site_type=cand.site_type,
+                            hardware_id=cand_hw.strip().upper(),
+                            protocol_id=proto_id,
+                            season_id=season_id,
+                        )
+                        if not prof_res.ok or prof_res.value is None:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    prof_res.error.message
+                                    if prof_res.error
+                                    else f"Invalid site radio profile for '{cand.site_id}'"
+                                ),
+                            )
+                        site_profiles[cand.site_id] = prof_res.value
+
+                    res = await asyncio.to_thread(
+                        compute_composite_viewshed,
+                        origins=combined_candidates,
+                        max_range_km=max_range,
+                        num_radials=radials,
+                        radio_config=radio_res.value,
+                        client_radio=client_radio,
+                        client_rx_height_m=client_rx_height_m,
+                        client_env_loss_db=client_env_loss_db,
+                        direction=direction,
+                        site_profiles=site_profiles,
+                    )
+
             if not res.ok or res.value is None:
+                err_code = res.error.code if res.error else ""
+                status_code = 400 if err_code == "INVALID_DIRECTION" else 500
                 raise HTTPException(
-                    status_code=500,
+                    status_code=status_code,
                     detail=res.error.message if res.error else "Composite viewshed calculation failed",
                 )
 
@@ -2459,32 +2905,19 @@ def create_web_app(
 
     @app.post("/api/home-check")
     def evaluate_home_check(
+        request: Request,
         req: Optional[HomeCheckRequest] = Body(default=None),
     ) -> Dict[str, Any]:
         prefs = registry.get_preferences()
         req_obj = req or HomeCheckRequest()
 
-        home_lat = req_obj.home_lat if req_obj.home_lat is not None else prefs.home_lat
-        home_lon = req_obj.home_lon if req_obj.home_lon is not None else prefs.home_lon
-        home_elev = (
-            req_obj.home_elev_m
-            if req_obj.home_elev_m is not None
-            else (
-                prefs.home_elev_m
-                if (req_obj.home_lat is None and req_obj.home_lon is None)
-                else _synthetic_vermont_elevation_fn(home_lat, home_lon)
-            )
-        )
-        home_agl = (
-            req_obj.home_height_agl_m
-            if req_obj.home_height_agl_m is not None
-            else prefs.home_height_agl_m
-        )
-
-        if req_obj.persist_height and req_obj.home_height_agl_m is not None:
-            prefs = registry.save_preferences(
-                prefs.model_copy(update={"home_height_agl_m": home_agl})
-            )
+        if req_obj.direction is not None:
+            dir_clean = req_obj.direction.strip().lower()
+            if dir_clean not in VALID_DIRECTIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid direction '{req_obj.direction}'. Expected one of {VALID_DIRECTIONS}.",
+                )
 
         hw_id = (req_obj.hardware_preset or prefs.hardware_preset).strip().upper()
         proto_id = (req_obj.protocol_profile or prefs.protocol_profile).strip().upper()
@@ -2501,14 +2934,90 @@ def create_web_app(
                 detail=radio_res.error.message if radio_res.error else "Invalid radio preset",
             )
 
-        nodes = registry.list_nodes()
-        reach_res = evaluate_home_node_reach(
-            home_coord=Coordinate(lat=home_lat, lon=home_lon, elevation_m=home_elev),
-            home_height_agl_m=home_agl,
-            nodes=nodes,
-            radio=radio_res.value,
-            elevation_fn=_synthetic_vermont_elevation_fn,
+        client_radio: Optional[RadioConfig] = None
+        client_env_loss_db: float = 0.0
+        env_default_agl: Optional[float] = None
+
+        if req_obj.client_preset is not None or req_obj.client_env is not None:
+            client_hw_id = (req_obj.client_preset or hw_id).strip().upper()
+            client_radio_res = build_radio_config(
+                hardware_id=client_hw_id,
+                protocol_id=proto_id,
+                season_id=season_id,
+            )
+            if not client_radio_res.ok or client_radio_res.value is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        client_radio_res.error.message
+                        if client_radio_res.error
+                        else "Invalid client radio preset"
+                    ),
+                )
+            client_radio = client_radio_res.value
+
+            if req_obj.client_env is not None:
+                env_key = req_obj.client_env.strip().upper()
+                if env_key not in CLIENT_ENVIRONMENT_PROFILES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Unknown client_env '{req_obj.client_env}'. "
+                            f"Available: {sorted(CLIENT_ENVIRONMENT_PROFILES.keys())}"
+                        ),
+                    )
+                env_prof = CLIENT_ENVIRONMENT_PROFILES[env_key]
+                client_env_loss_db = env_prof.clutter_loss_db
+                env_default_agl = env_prof.default_agl_m
+
+        home_lat = req_obj.home_lat if req_obj.home_lat is not None else prefs.home_lat
+        home_lon = req_obj.home_lon if req_obj.home_lon is not None else prefs.home_lon
+        home_elev = (
+            req_obj.home_elev_m
+            if req_obj.home_elev_m is not None
+            else (
+                prefs.home_elev_m
+                if (req_obj.home_lat is None and req_obj.home_lon is None)
+                else _synthetic_vermont_elevation_fn(home_lat, home_lon)
+            )
         )
+        if req_obj.home_height_agl_m is not None:
+            home_agl = req_obj.home_height_agl_m
+        elif env_default_agl is not None:
+            home_agl = env_default_agl
+        else:
+            home_agl = prefs.home_height_agl_m
+
+        client_local_home = False
+        if req_obj.persist_height:
+            if is_hosted and not _verify_coordinator_auth(request):
+                client_local_home = True
+            elif req_obj.home_height_agl_m is not None:
+                prefs = registry.save_preferences(
+                    prefs.model_copy(update={"home_height_agl_m": home_agl})
+                )
+
+        nodes = registry.list_nodes()
+        if client_radio is None:
+            reach_res = evaluate_home_node_reach(
+                home_coord=Coordinate(lat=home_lat, lon=home_lon, elevation_m=home_elev),
+                home_height_agl_m=home_agl,
+                nodes=nodes,
+                radio=radio_res.value,
+                elevation_fn=_synthetic_vermont_elevation_fn,
+            )
+        else:
+            reach_res = evaluate_home_node_reach(
+                home_coord=Coordinate(lat=home_lat, lon=home_lon, elevation_m=home_elev),
+                home_height_agl_m=home_agl,
+                nodes=nodes,
+                radio=radio_res.value,
+                elevation_fn=_synthetic_vermont_elevation_fn,
+                client_radio=client_radio,
+                client_env_loss_db=client_env_loss_db,
+                protocol_id=proto_id,
+                season_id=season_id,
+            )
         if not reach_res.ok or reach_res.value is None:
             raise HTTPException(
                 status_code=400,
@@ -2516,11 +3025,14 @@ def create_web_app(
             )
 
         report_dict = reach_res.value.model_dump(mode="json")
-        return {
+        resp_payload: Dict[str, Any] = {
             "ok": True,
             **report_dict,
             "report": report_dict,
         }
+        if client_local_home:
+            resp_payload["client_local_home"] = True
+        return resp_payload
 
     @app.post("/api/optimize")
     def optimize_backbone(
@@ -2688,6 +3200,7 @@ def create_web_app(
         prefs = registry.get_preferences()
         nodes = registry.list_nodes()
         nodes_by_id = {n.site_id: n for n in nodes}
+        nodes_upper = {nid.upper(): n for nid, n in nodes_by_id.items()}
 
         def _get_cand(sid: str) -> SiteCandidate:
             if sid in nodes_by_id:
@@ -2711,17 +3224,160 @@ def create_web_app(
         proto_id = (req.protocol_profile or prefs.protocol_profile).strip().upper()
         season_id = (req.season_profile or prefs.season_profile).strip().upper()
         radio_res = build_radio_config(hardware_id=hw_id, protocol_id=proto_id, season_id=season_id)
-        radio = radio_res.value if radio_res.ok else RadioConfig()
 
-        route_res = find_optimal_mesh_route(
-            origin=origin_cand,
-            destination=dest_cand,
-            candidate_repeaters=all_cands,
-            radio=radio,
-            elevation_fn=_synthetic_vermont_elevation_fn,
-            max_hops=req.max_hops,
-            min_link_margin_db=req.min_link_margin_db,
+        use_asymmetric_route = (
+            req.origin_client_preset is not None
+            or req.destination_client_preset is not None
+            or req.client_env is not None
+            or req.site_presets is not None
         )
+        if (
+            req.hardware_preset is not None
+            or req.protocol_profile is not None
+            or req.season_profile is not None
+            or use_asymmetric_route
+        ) and (not radio_res.ok or radio_res.value is None):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    radio_res.error.message
+                    if radio_res.error
+                    else "Invalid radio preset or profile"
+                ),
+            )
+        radio = radio_res.value if (radio_res.ok and radio_res.value is not None) else RadioConfig()
+
+        if not use_asymmetric_route:
+            route_res = find_optimal_mesh_route(
+                origin=origin_cand,
+                destination=dest_cand,
+                candidate_repeaters=all_cands,
+                radio=radio,
+                elevation_fn=_synthetic_vermont_elevation_fn,
+                max_hops=req.max_hops,
+                min_link_margin_db=req.min_link_margin_db,
+            )
+        else:
+            origin_client_radio: Optional[RadioConfig] = None
+            destination_client_radio: Optional[RadioConfig] = None
+            client_env_loss_db = 0.0
+
+            if req.origin_client_preset is not None:
+                orig_hw = req.origin_client_preset.strip().upper()
+                orig_res = build_radio_config(
+                    hardware_id=orig_hw,
+                    protocol_id=proto_id,
+                    season_id=season_id,
+                )
+                if not orig_res.ok or orig_res.value is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            orig_res.error.message
+                            if orig_res.error
+                            else f"Invalid origin_client_preset '{req.origin_client_preset}'"
+                        ),
+                    )
+                origin_client_radio = orig_res.value
+
+            if req.destination_client_preset is not None:
+                dest_hw = req.destination_client_preset.strip().upper()
+                dest_res = build_radio_config(
+                    hardware_id=dest_hw,
+                    protocol_id=proto_id,
+                    season_id=season_id,
+                )
+                if not dest_res.ok or dest_res.value is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            dest_res.error.message
+                            if dest_res.error
+                            else f"Invalid destination_client_preset '{req.destination_client_preset}'"
+                        ),
+                    )
+                destination_client_radio = dest_res.value
+
+            if req.client_env is not None:
+                env_key = req.client_env.strip().upper()
+                if env_key not in CLIENT_ENVIRONMENT_PROFILES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Unknown client_env '{req.client_env}'. "
+                            f"Available: {sorted(CLIENT_ENVIRONMENT_PROFILES.keys())}"
+                        ),
+                    )
+                client_env_loss_db = CLIENT_ENVIRONMENT_PROFILES[env_key].clutter_loss_db
+                if origin_client_radio is None and destination_client_radio is None:
+                    origin_client_radio = radio
+
+            presets_exact: Dict[str, str] = {}
+            presets_upper: Dict[str, str] = {}
+            for raw_sid, raw_hw in (req.site_presets or {}).items():
+                sid_k = raw_sid.strip()
+                hw_v = (raw_hw or "").strip().upper()
+                chk = build_radio_config(
+                    hardware_id=hw_v,
+                    protocol_id=proto_id,
+                    season_id=season_id,
+                )
+                if not chk.ok or chk.value is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            chk.error.message
+                            if chk.error
+                            else f"Invalid site preset '{raw_hw}' for '{raw_sid}'"
+                        ),
+                    )
+                presets_exact[sid_k] = hw_v
+                presets_upper[sid_k.upper()] = hw_v
+
+            site_profiles: Dict[str, SiteRadioProfile] = {}
+            route_pool_by_id: Dict[str, SiteCandidate] = {c.site_id: c for c in all_cands}
+            route_pool_by_id[origin_cand.site_id] = origin_cand
+            route_pool_by_id[dest_cand.site_id] = dest_cand
+
+            for cand in route_pool_by_id.values():
+                reg_node = nodes_by_id.get(cand.site_id) or nodes_upper.get(cand.site_id.upper())
+                cand_hw = (
+                    presets_exact.get(cand.site_id)
+                    or presets_upper.get(cand.site_id.upper())
+                    or (reg_node.hardware_preset if reg_node and reg_node.hardware_preset else None)
+                    or hw_id
+                )
+                prof_res = resolve_site_radio_profile(
+                    site_type=cand.site_type,
+                    hardware_id=cand_hw.strip().upper(),
+                    protocol_id=proto_id,
+                    season_id=season_id,
+                )
+                if not prof_res.ok or prof_res.value is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            prof_res.error.message
+                            if prof_res.error
+                            else f"Invalid site radio profile for '{cand.site_id}'"
+                        ),
+                    )
+                site_profiles[cand.site_id] = prof_res.value
+
+            route_res = find_optimal_mesh_route(
+                origin=origin_cand,
+                destination=dest_cand,
+                candidate_repeaters=all_cands,
+                radio=radio,
+                elevation_fn=_synthetic_vermont_elevation_fn,
+                max_hops=req.max_hops,
+                min_link_margin_db=req.min_link_margin_db,
+                origin_client_radio=origin_client_radio,
+                destination_client_radio=destination_client_radio,
+                client_env_loss_db=client_env_loss_db,
+                site_profiles=site_profiles,
+            )
+
         if not route_res.ok or route_res.value is None:
             raise HTTPException(status_code=500, detail="Failed to calculate mesh route")
 
@@ -3027,7 +3683,10 @@ def create_web_app(
         raise HTTPException(status_code=500, detail="Survey generator unavailable.")
 
     @app.get("/api/export/html", response_class=HTMLResponse)
-    def export_portable_html() -> HTMLResponse:
+    def export_portable_html(
+        client_preset: Optional[str] = Query(default=None),
+        client_env: Optional[str] = Query(default=None),
+    ) -> HTMLResponse:
         prefs = registry.get_preferences()
         nodes = registry.list_nodes()
         enriched_sites = [_enrich_node_dict(n, fixture_lookup) for n in nodes]
@@ -3036,14 +3695,45 @@ def create_web_app(
             protocol_id=prefs.protocol_profile,
             season_id=prefs.season_profile,
         )
+        home_agl = prefs.home_height_agl_m
+        resolved_client_radio: Optional[RadioConfig] = None
+        client_env_loss_db = 0.0
+        if client_preset is not None or client_env is not None:
+            c_hw = (client_preset or prefs.hardware_preset).strip().upper()
+            c_res = build_radio_config(
+                hardware_id=c_hw,
+                protocol_id=prefs.protocol_profile,
+                season_id=prefs.season_profile,
+            )
+            if not c_res.ok or c_res.value is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=c_res.error.message if c_res.error else "Invalid client_preset",
+                )
+            resolved_client_radio = c_res.value
+            if client_env is not None:
+                env_k = client_env.strip().upper()
+                if env_k not in CLIENT_ENVIRONMENT_PROFILES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unknown client_env '{client_env}'.",
+                    )
+                env_p = CLIENT_ENVIRONMENT_PROFILES[env_k]
+                client_env_loss_db = env_p.clutter_loss_db
+                home_agl = env_p.default_agl_m
+
         reach_res = evaluate_home_node_reach(
             home_coord=Coordinate(
                 lat=prefs.home_lat, lon=prefs.home_lon, elevation_m=prefs.home_elev_m
             ),
-            home_height_agl_m=prefs.home_height_agl_m,
+            home_height_agl_m=home_agl,
             nodes=nodes,
             radio=radio_res.value if radio_res.ok else None,
             elevation_fn=_synthetic_vermont_elevation_fn,
+            client_radio=resolved_client_radio,
+            client_env_loss_db=client_env_loss_db,
+            protocol_id=prefs.protocol_profile,
+            season_id=prefs.season_profile,
         )
         reach_dict = (
             reach_res.value.model_dump(mode="json")
@@ -3341,7 +4031,95 @@ def create_web_app(
             frequency_mhz=req.frequency_mhz,
             tx_power_dbm=req.tx_power_dbm,
         )
-        eval_res = evaluate_multihop_corridor(resolved_nodes, radio_config=radio_cfg)
+
+        use_asymmetric_corridor = bool(req.asymmetric or req.site_presets is not None)
+        if (
+            use_asymmetric_corridor
+            or req.protocol_profile is not None
+            or req.season_profile is not None
+        ):
+            prefs = registry.get_preferences()
+            default_hw = prefs.hardware_preset.strip().upper()
+            proto_id = (req.protocol_profile or prefs.protocol_profile).strip().upper()
+            season_id = (req.season_profile or prefs.season_profile).strip().upper()
+
+            base_chk = build_radio_config(
+                hardware_id=default_hw,
+                protocol_id=proto_id,
+                season_id=season_id,
+            )
+            if not base_chk.ok or base_chk.value is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        base_chk.error.message
+                        if base_chk.error
+                        else "Invalid corridor protocol or seasonal profile."
+                    ),
+                )
+
+            if not use_asymmetric_corridor:
+                eval_res = evaluate_multihop_corridor(resolved_nodes, radio_config=radio_cfg)
+            else:
+                presets_exact: Dict[str, str] = {}
+                presets_upper: Dict[str, str] = {}
+                for raw_sid, raw_hw in (req.site_presets or {}).items():
+                    sid_k = raw_sid.strip()
+                    hw_v = (raw_hw or "").strip().upper()
+                    chk = build_radio_config(
+                        hardware_id=hw_v,
+                        protocol_id=proto_id,
+                        season_id=season_id,
+                    )
+                    if not chk.ok or chk.value is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                chk.error.message
+                                if chk.error
+                                else f"Invalid site preset '{raw_hw}' for '{raw_sid}'."
+                            ),
+                        )
+                    presets_exact[sid_k] = hw_v
+                    presets_upper[sid_k.upper()] = hw_v
+
+                nodes_upper = {nid.upper(): n for nid, n in nodes_by_id.items()}
+                site_profiles: Dict[str, SiteRadioProfile] = {}
+                for node in resolved_nodes:
+                    reg_node = nodes_by_id.get(node.site_id) or nodes_upper.get(
+                        node.site_id.upper()
+                    )
+                    node_hw = (
+                        presets_exact.get(node.site_id)
+                        or presets_upper.get(node.site_id.upper())
+                        or (reg_node.hardware_preset if reg_node and reg_node.hardware_preset else None)
+                        or default_hw
+                    )
+                    prof_res = resolve_site_radio_profile(
+                        site_type=node.site_type,
+                        hardware_id=node_hw.strip().upper(),
+                        protocol_id=proto_id,
+                        season_id=season_id,
+                    )
+                    if not prof_res.ok or prof_res.value is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                prof_res.error.message
+                                if prof_res.error
+                                else f"Invalid site radio profile for '{node.site_id}'."
+                            ),
+                        )
+                    site_profiles[node.site_id] = prof_res.value
+
+                eval_res = evaluate_multihop_corridor(
+                    resolved_nodes,
+                    radio_config=radio_cfg,
+                    site_profiles=site_profiles,
+                )
+        else:
+            eval_res = evaluate_multihop_corridor(resolved_nodes, radio_config=radio_cfg)
+
         if not eval_res.ok or eval_res.value is None:
             raise HTTPException(
                 status_code=400,

@@ -7,8 +7,12 @@ against bundled fixtures, living registry nodes, and custom ad-hoc site candidat
 from __future__ import annotations
 
 from pathlib import Path
+import warnings
 import pytest
-from fastapi.testclient import TestClient
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message=".*BlockingPortal.*", category=DeprecationWarning)
+    from fastapi.testclient import TestClient
 
 from meshscout.web.app import create_web_app
 
@@ -104,3 +108,62 @@ def test_post_landowner_report_validation_error(client: TestClient) -> None:
     }
     resp = client.post("/api/reports/landowner", json=invalid_payload)
     assert resp.status_code == 422
+
+
+def test_portable_workbench_html_with_client_reach_fields(client: TestClient) -> None:
+    """Verify portable HTML snapshot renders cleanly in both legacy symmetric and asymmetric client reach modes."""
+    from meshscout.core.registry import WorkspacePreferences
+    from meshscout.web.app import _fallback_portable_workbench_html
+
+    # 1. HTTP endpoint in legacy symmetric mode
+    sym_resp = client.get("/api/export/html")
+    assert sym_resp.status_code == 200
+    assert "text/html" in sym_resp.headers.get("content-type", "")
+    assert "M E S H S C O U T // Portable Club Snapshot" in sym_resp.text
+
+    # 2. HTTP endpoint with asymmetric client reach query parameters
+    asym_resp = client.get("/api/export/html?client_preset=SENSECAP_T1000E&client_env=INDOOR_WINDOW")
+    assert asym_resp.status_code == 200
+    assert "DL " in asym_resp.text
+    assert "UL " in asym_resp.text
+
+    # 3. Direct fallback helper with explicit hear_only_alligator tower reach item
+    prefs = WorkspacePreferences()
+    html_snapshot = _fallback_portable_workbench_html(
+        prefs=prefs,
+        sites=[
+            {
+                "site_id": "VT-PEAK-01",
+                "name": "Mount Mansfield",
+                "site_type": "mountain_peak",
+                "status": "active_on_air",
+                "elevation_m": 1339.0,
+                "composite_score": 88.5,
+                "desense_risk": "moderate",
+                "notes": "Summit repeater",
+            }
+        ],
+        home_report={
+            "best_azimuth_deg": 72.4,
+            "best_cardinal_direction": "ENE",
+            "ranked_towers": [
+                {
+                    "recommended_rank": 1,
+                    "site_id": "VT-PEAK-01",
+                    "name": "Mount Mansfield",
+                    "azimuth_deg": 72.4,
+                    "cardinal_direction": "ENE",
+                    "distance_km": 24.8,
+                    "rx_power_dbm": -121.5,
+                    "link_margin_db": -3.2,
+                    "downlink_margin_db": 7.8,
+                    "uplink_margin_db": -3.2,
+                    "reachability_state": "hear_only_alligator",
+                    "has_line_of_sight": True,
+                }
+            ],
+        },
+    )
+    assert "<!DOCTYPE html>" in html_snapshot
+    assert "DL 7.8 / UL -3.2" in html_snapshot
+    assert "[HEAR_ONLY_ALLIGATOR]" in html_snapshot

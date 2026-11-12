@@ -66,7 +66,13 @@ from meshscout.core.contracts import (
 from meshscout.core.fresnel import analyze_fresnel_clearance, haversine_distance_km
 from meshscout.core.itm import evaluate_point_to_point_link
 from meshscout.core.optimizer import solve_minimum_set_cover
-from meshscout.core.presets import HARDWARE_PRESETS, PROTOCOL_PROFILES
+from meshscout.core.presets import (
+    CLIENT_ENVIRONMENT_PROFILES,
+    HARDWARE_PRESETS,
+    PROTOCOL_PROFILES,
+    SITE_NOISE_PENALTIES_DB,
+    build_radio_config,
+)
 from meshscout.core.provisioning import (
     ProvisioningTarget,
     generate_site_provisioning,
@@ -76,6 +82,7 @@ from meshscout.core.registry import (
     LivingMeshRegistry,
     RegisteredNode,
     WorkspacePreferences,
+    evaluate_home_node_reach,
 )
 from meshscout.core.scorer import (
     EmitterSpec,
@@ -388,8 +395,113 @@ def evaluate_link_budget(
     tx_power_dbm: float = 20.0,
     source_mast_m: float = 10.0,
     target_mast_m: float = 5.0,
+    evaluation_mode: Optional[str] = None,
+    source_preset: Optional[str] = None,
+    target_preset: Optional[str] = None,
+    client_env: Optional[str] = None,
+    protocol_profile: str = "MESHTASTIC_LONGFAST",
+    season_profile: str = "SUMMER_FOLIAGE",
+    source_noise_penalty_db: float = 0.0,
+    target_noise_penalty_db: float = 0.0,
 ) -> Dict[str, Any]:
     """Evaluate point-to-point Fresnel clearance and Longley-Rice ITM link budget offline."""
+    is_dual_mode = (
+        evaluation_mode is not None
+        or source_preset is not None
+        or target_preset is not None
+        or client_env is not None
+        or source_noise_penalty_db != 0.0
+        or target_noise_penalty_db != 0.0
+    )
+
+    mode_norm: Optional[str] = None
+    eff_source_preset: Optional[str] = None
+    eff_target_preset: Optional[str] = None
+    eff_env_key: Optional[str] = None
+    client_env_loss_db: float = 0.0
+    source_radio: Optional[RadioConfig] = None
+    target_radio: Optional[RadioConfig] = None
+
+    if is_dual_mode:
+        mode_norm = evaluation_mode.strip().lower() if evaluation_mode is not None else "client"
+        if mode_norm not in ("client", "backhaul"):
+            return {
+                "ok": False,
+                "error": {
+                    "code": "INVALID_EVALUATION_MODE",
+                    "message": (
+                        f"Unsupported evaluation_mode '{evaluation_mode}'. "
+                        "Must be 'client' or 'backhaul'."
+                    ),
+                },
+            }
+
+        if client_env is not None:
+            env_key = client_env.strip().upper()
+            if env_key not in CLIENT_ENVIRONMENT_PROFILES:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "UNKNOWN_CLIENT_ENV",
+                        "message": (
+                            f"Unknown client_env '{client_env}'. "
+                            f"Available: {sorted(CLIENT_ENVIRONMENT_PROFILES.keys())}"
+                        ),
+                    },
+                }
+        else:
+            env_key = "OUTDOOR_CLEAR"
+
+        if mode_norm == "backhaul":
+            client_env_loss_db = 0.0
+            eff_env_key = None
+            eff_source_preset = (source_preset or "STATION_G2_BACKBONE").strip().upper()
+            eff_target_preset = (target_preset or "RAK4631_SOLAR").strip().upper()
+        else:
+            eff_env_key = env_key
+            client_env_loss_db = CLIENT_ENVIRONMENT_PROFILES[env_key].clutter_loss_db
+            eff_source_preset = (source_preset or "STATION_G2_BACKBONE").strip().upper()
+            eff_target_preset = (target_preset or "SENSECAP_T1000E").strip().upper()
+
+        src_res = build_radio_config(
+            hardware_id=eff_source_preset,
+            protocol_id=protocol_profile,
+            season_id=season_profile,
+        )
+        if not src_res.ok or src_res.value is None:
+            return {
+                "ok": False,
+                "error": {
+                    "code": src_res.error.code if src_res.error else "RADIO_CONFIG_ERROR",
+                    "message": (
+                        src_res.error.message
+                        if src_res.error
+                        else "Failed to build source radio configuration."
+                    ),
+                },
+            }
+
+        tgt_res = build_radio_config(
+            hardware_id=eff_target_preset,
+            protocol_id=protocol_profile,
+            season_id=season_profile,
+        )
+        if not tgt_res.ok or tgt_res.value is None:
+            return {
+                "ok": False,
+                "error": {
+                    "code": tgt_res.error.code if tgt_res.error else "RADIO_CONFIG_ERROR",
+                    "message": (
+                        tgt_res.error.message
+                        if tgt_res.error
+                        else "Failed to build target radio configuration."
+                    ),
+                },
+            }
+
+        source_radio = src_res.value
+        target_radio = tgt_res.value
+
     source_site = SiteCandidate(
         site_id="SOURCE-NODE",
         name="Source Node",
@@ -433,15 +545,30 @@ def evaluate_link_budget(
         }
     profile = prof_res.value
 
-    fresnel_res = analyze_fresnel_clearance(
-        profile=profile,
-        frequency_mhz=frequency_mhz,
-    )
-    radio = RadioConfig(frequency_mhz=frequency_mhz, tx_power_dbm=tx_power_dbm)
-    itm_res = evaluate_point_to_point_link(
-        profile=profile,
-        radio=radio,
-    )
+    if not is_dual_mode:
+        fresnel_res = analyze_fresnel_clearance(
+            profile=profile,
+            frequency_mhz=frequency_mhz,
+        )
+        radio = RadioConfig(frequency_mhz=frequency_mhz, tx_power_dbm=tx_power_dbm)
+        itm_res = evaluate_point_to_point_link(
+            profile=profile,
+            radio=radio,
+        )
+    else:
+        assert source_radio is not None and target_radio is not None
+        fresnel_res = analyze_fresnel_clearance(
+            profile=profile,
+            frequency_mhz=source_radio.frequency_mhz,
+        )
+        itm_res = evaluate_point_to_point_link(
+            profile=profile,
+            radio=source_radio,
+            target_radio=target_radio,
+            source_noise_penalty_db=float(source_noise_penalty_db),
+            target_noise_penalty_db=float(target_noise_penalty_db),
+            client_env_loss_db=client_env_loss_db,
+        )
 
     if not fresnel_res.ok or fresnel_res.value is None:
         return {
@@ -463,18 +590,34 @@ def evaluate_link_budget(
     fresnel = fresnel_res.value
     link = itm_res.value
 
+    fresnel_dict = {
+        "total_distance_m": fresnel.total_distance_m,
+        "frequency_mhz": fresnel.frequency_mhz,
+        "has_line_of_sight": fresnel.has_line_of_sight,
+        "fresnel_60pct_clear": fresnel.fresnel_60pct_clear,
+        "min_clearance_m": round(fresnel.min_clearance_m, 3),
+        "min_clearance_ratio": round(fresnel.min_clearance_ratio, 4),
+        "max_knife_edge_nu": round(fresnel.max_knife_edge_nu, 4),
+    }
+
+    if not is_dual_mode:
+        return {
+            "ok": True,
+            "link_budget": link.model_dump(mode="json"),
+            "fresnel_analysis": fresnel_dict,
+        }
+
     return {
         "ok": True,
-        "link_budget": link.model_dump(),
-        "fresnel_analysis": {
-            "total_distance_m": fresnel.total_distance_m,
-            "frequency_mhz": fresnel.frequency_mhz,
-            "has_line_of_sight": fresnel.has_line_of_sight,
-            "fresnel_60pct_clear": fresnel.fresnel_60pct_clear,
-            "min_clearance_m": round(fresnel.min_clearance_m, 3),
-            "min_clearance_ratio": round(fresnel.min_clearance_ratio, 4),
-            "max_knife_edge_nu": round(fresnel.max_knife_edge_nu, 4),
-        },
+        "evaluation_mode": mode_norm,
+        "source_preset": eff_source_preset,
+        "target_preset": eff_target_preset,
+        "client_env": eff_env_key,
+        "client_env_loss_db": client_env_loss_db,
+        "protocol_profile": protocol_profile.strip().upper(),
+        "season_profile": season_profile.strip().upper(),
+        "link_budget": link.model_dump(mode="json"),
+        "fresnel_analysis": fresnel_dict,
     }
 
 
@@ -1127,13 +1270,18 @@ def manage_living_mesh_state(
     home_lat: Optional[float] = None,
     home_lon: Optional[float] = None,
     home_name: Optional[str] = None,
+    home_elev_m: Optional[float] = None,
+    home_height_agl_m: Optional[float] = None,
+    client_preset: Optional[str] = None,
+    client_env: Optional[str] = None,
+    protocol_profile: Optional[str] = None,
+    season_profile: Optional[str] = None,
     pack_json: Optional[str] = None,
     pack: Optional[Dict[str, Any]] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Inspect and manage persistent living mesh network state, registered club nodes,
-    deployment lifecycle statuses (candidate, testing, active_on_air, blocked, dismantled), and
-    operator workspace preferences in the local LivingMeshRegistry SQLite database.
+    deployment lifecycle statuses, client uplink reachability, and workspace preferences.
     """
     registry = LivingMeshRegistry(db_path=db_path)
     action_norm = action.strip().lower() if action else ""
@@ -1294,6 +1442,105 @@ def manage_living_mesh_state(
             "imported_count": res.value,
         }
 
+    elif action_norm == "check_reach":
+        prefs = registry.get_preferences()
+        lat = float(home_lat) if home_lat is not None else prefs.home_lat
+        lon = float(home_lon) if home_lon is not None else prefs.home_lon
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            return {
+                "ok": False,
+                "error": {
+                    "code": "INVALID_COORDINATES",
+                    "message": f"Invalid home latitude ({lat}) or longitude ({lon}).",
+                },
+            }
+
+        if home_elev_m is not None:
+            elev_m = float(home_elev_m)
+        elif home_lat is not None or home_lon is not None:
+            elev_m = _synthetic_vermont_elevation_fn(lat, lon)
+        else:
+            elev_m = prefs.home_elev_m
+
+        eff_preset = (client_preset or "SENSECAP_T1000E").strip().upper()
+        eff_env = (client_env or "OUTDOOR_CLEAR").strip().upper()
+        if eff_env not in CLIENT_ENVIRONMENT_PROFILES:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "UNKNOWN_CLIENT_ENV",
+                    "message": (
+                        f"Unknown client_env '{client_env}'. "
+                        f"Available: {sorted(CLIENT_ENVIRONMENT_PROFILES.keys())}"
+                    ),
+                },
+            }
+
+        env_prof = CLIENT_ENVIRONMENT_PROFILES[eff_env]
+        agl_m = float(home_height_agl_m) if home_height_agl_m is not None else env_prof.default_agl_m
+        eff_protocol = (protocol_profile or "MESHTASTIC_LONGFAST").strip().upper()
+        eff_season = (season_profile or "SUMMER_FOLIAGE").strip().upper()
+
+        radio_res = build_radio_config(
+            hardware_id=eff_preset,
+            protocol_id=eff_protocol,
+            season_id=eff_season,
+        )
+        if not radio_res.ok or radio_res.value is None:
+            return {
+                "ok": False,
+                "error": {
+                    "code": radio_res.error.code if radio_res.error else "RADIO_CONFIG_ERROR",
+                    "message": (
+                        radio_res.error.message
+                        if radio_res.error
+                        else "Failed to resolve client radio preset."
+                    ),
+                },
+            }
+
+        nodes = registry.list_nodes()
+        if not nodes:
+            _, candidates = load_regional_fixtures(region=prefs.last_region or "vt_chittenden")
+            registry.seed_candidates(candidates)
+            nodes = registry.list_nodes()
+
+        reach_res = evaluate_home_node_reach(
+            home_coord=Coordinate(lat=lat, lon=lon, elevation_m=elev_m),
+            home_height_agl_m=agl_m,
+            nodes=nodes,
+            client_radio=radio_res.value,
+            client_env_loss_db=env_prof.clutter_loss_db,
+            protocol_id=eff_protocol,
+            season_id=eff_season,
+            elevation_fn=_synthetic_vermont_elevation_fn,
+        )
+        if not reach_res.ok or reach_res.value is None:
+            return {
+                "ok": False,
+                "error": {
+                    "code": reach_res.error.code if reach_res.error else "REACH_EVALUATION_FAILED",
+                    "message": (
+                        reach_res.error.message
+                        if reach_res.error
+                        else "Home reachability evaluation failed."
+                    ),
+                },
+            }
+
+        report_dict = reach_res.value.model_dump(mode="json")
+        return {
+            "ok": True,
+            "action": "check_reach",
+            "client_preset": eff_preset,
+            "client_env": eff_env,
+            "client_env_loss_db": env_prof.clutter_loss_db,
+            "protocol_profile": eff_protocol,
+            "season_profile": eff_season,
+            **report_dict,
+            "report": report_dict,
+        }
+
     else:
         return {
             "ok": False,
@@ -1301,7 +1548,8 @@ def manage_living_mesh_state(
                 "code": "INVALID_ACTION",
                 "message": (
                     f"Unknown action: '{action}'. "
-                    "Valid actions: list, update_status, set_home, get_preferences, reconcile_dismantled, export_pack, import_pack"
+                    "Valid actions: list, update_status, set_home, get_preferences, "
+                    "reconcile_dismantled, export_pack, import_pack, check_reach"
                 ),
             },
         }
@@ -1403,7 +1651,7 @@ MCP_TOOLS_MANIFEST: List[Dict[str, Any]] = [
         "name": "evaluate_link_budget",
         "description": (
             "Evaluate point-to-point 4/3 Earth Fresnel zone clearance and Longley-Rice ITM "
-            "link budget between two coordinates."
+            "link budget between two coordinates in symmetric, client, or backhaul mode."
         ),
         "inputSchema": {
             "type": "object",
@@ -1418,6 +1666,44 @@ MCP_TOOLS_MANIFEST: List[Dict[str, Any]] = [
                 "tx_power_dbm": {"type": "number", "default": 20.0},
                 "source_mast_m": {"type": "number", "default": 10.0},
                 "target_mast_m": {"type": "number", "default": 5.0},
+                "evaluation_mode": {
+                    "type": "string",
+                    "enum": ["client", "backhaul"],
+                    "description": "Evaluation mode ('client' applies client clutter; 'backhaul' enforces 0.0 dB clutter)",
+                },
+                "source_preset": {
+                    "type": "string",
+                    "description": "Hardware preset ID for source transceiver",
+                },
+                "target_preset": {
+                    "type": "string",
+                    "description": "Hardware preset ID for target transceiver",
+                },
+                "client_env": {
+                    "type": "string",
+                    "enum": list(CLIENT_ENVIRONMENT_PROFILES.keys()),
+                    "description": "Client operating environment clutter profile",
+                },
+                "protocol_profile": {
+                    "type": "string",
+                    "default": "MESHTASTIC_LONGFAST",
+                    "description": "Protocol modulation profile ID",
+                },
+                "season_profile": {
+                    "type": "string",
+                    "default": "SUMMER_FOLIAGE",
+                    "description": "Seasonal foliage attenuation profile ID",
+                },
+                "source_noise_penalty_db": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "Local RF noise floor degradation penalty at source site in dB",
+                },
+                "target_noise_penalty_db": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "Local RF noise floor degradation penalty at target site in dB",
+                },
             },
             "required": [
                 "source_lat",
@@ -1662,7 +1948,7 @@ MCP_TOOLS_MANIFEST: List[Dict[str, Any]] = [
         "description": (
             "Inspect and manage persistent living mesh network state, registered club nodes, "
             "deployment lifecycle statuses (candidate, testing, active_on_air, blocked, dismantled), "
-            "and operator home node workspace preferences in the local SQLite registry."
+            "client uplink reachability (check_reach), and operator workspace preferences."
         ),
         "inputSchema": {
             "type": "object",
@@ -1677,6 +1963,7 @@ MCP_TOOLS_MANIFEST: List[Dict[str, Any]] = [
                         "reconcile_dismantled",
                         "export_pack",
                         "import_pack",
+                        "check_reach",
                     ],
                     "description": "Management action to execute",
                 },
@@ -1695,15 +1982,40 @@ MCP_TOOLS_MANIFEST: List[Dict[str, Any]] = [
                 },
                 "home_lat": {
                     "type": "number",
-                    "description": "Operator home node latitude in decimal degrees",
+                    "description": "Operator home or client node latitude in decimal degrees",
                 },
                 "home_lon": {
                     "type": "number",
-                    "description": "Operator home node longitude in decimal degrees",
+                    "description": "Operator home or client node longitude in decimal degrees",
                 },
                 "home_name": {
                     "type": "string",
                     "description": "Operator home node friendly name",
+                },
+                "home_elev_m": {
+                    "type": "number",
+                    "description": "Optional ground elevation in meters above sea level for check_reach",
+                },
+                "home_height_agl_m": {
+                    "type": "number",
+                    "description": "Optional antenna height above ground in meters for check_reach",
+                },
+                "client_preset": {
+                    "type": "string",
+                    "description": "Client hardware preset ID for check_reach (default: SENSECAP_T1000E)",
+                },
+                "client_env": {
+                    "type": "string",
+                    "enum": list(CLIENT_ENVIRONMENT_PROFILES.keys()),
+                    "description": "Client operating environment clutter profile for check_reach",
+                },
+                "protocol_profile": {
+                    "type": "string",
+                    "description": "Protocol modulation profile ID for check_reach (default: MESHTASTIC_LONGFAST)",
+                },
+                "season_profile": {
+                    "type": "string",
+                    "description": "Seasonal foliage attenuation profile ID for check_reach (default: SUMMER_FOLIAGE)",
                 },
                 "pack_json": {
                     "type": "string",
@@ -1788,7 +2100,10 @@ MCP_RESOURCES_MANIFEST: List[Dict[str, Any]] = [
     {
         "uri": "meshscout://presets/hardware",
         "name": "Hardware Presets",
-        "description": "Standard LoRa radio hardware specifications and power consumption profiles",
+        "description": (
+            "Standard LoRa radio hardware specifications, client environment clutter profiles, "
+            "and high-site RF noise penalties"
+        ),
         "mimeType": "application/json",
     },
     {
@@ -1905,7 +2220,17 @@ def _read_resource_content(uri: str, db_path: Optional[str] = None) -> Optional[
 
     if norm_uri == "meshscout://presets/hardware":
         hw = {k: v.model_dump(mode="json") for k, v in HARDWARE_PRESETS.items()}
-        return json.dumps(hw, indent=2)
+        payload: Dict[str, Any] = {
+            **hw,
+            "hardware_presets": hw,
+            "client_environment_profiles": {
+                k: v.model_dump(mode="json") for k, v in CLIENT_ENVIRONMENT_PROFILES.items()
+            },
+            "site_noise_penalties_db": {
+                k.value: v for k, v in SITE_NOISE_PENALTIES_DB.items()
+            },
+        }
+        return json.dumps(payload, indent=2)
 
     if norm_uri == "meshscout://presets/protocols":
         protos = {k: v.model_dump(mode="json") for k, v in PROTOCOL_PROFILES.items()}
@@ -2306,9 +2631,9 @@ DOMAIN_CAPABILITY_MAP: Dict[str, Dict[str, Any]] = {
         "description": "Community site deployment archetypes, cross-protocol translation (Meshtastic, MeshCore, Reticulum), and split-horizon backhaul guidance",
     },
     "core.presets": {
-        "tools": [],
+        "tools": ["evaluate_link_budget", "manage_living_mesh_state"],
         "resources": ["meshscout://presets/hardware", "meshscout://presets/protocols"],
-        "description": "Hardware and protocol reference specifications and standard radio profiles",
+        "description": "Hardware, protocol, client environment clutter, and high-site noise floor profiles",
     },
     "adapters.mqtt": {
         "tools": ["analyze_mesh_coverage_gaps"],
@@ -2470,7 +2795,7 @@ def create_fastmcp_app(host: str = "127.0.0.1", port: int = 8000) -> Any:
 
         @mcp.resource("meshscout://presets/hardware", mime_type="application/json")
         def resource_presets_hardware() -> str:
-            """Standard LoRa radio hardware specifications and power consumption profiles."""
+            """LoRa radio hardware presets, client environment clutter profiles, and site noise penalties."""
             content = _read_resource_content("meshscout://presets/hardware")
             return content or "{}"
 

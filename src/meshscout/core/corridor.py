@@ -9,7 +9,7 @@ Follows zero runtime dependencies beyond pydantic>=2.0.0.
 from __future__ import annotations
 
 import math
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 from pydantic import BaseModel, Field
 
 from meshscout.core.composite_viewshed import _synthetic_vermont_elevation_fn
@@ -18,10 +18,13 @@ from meshscout.core.contracts import (
     ElevationPoint,
     ElevationProfile,
     RadioConfig,
+    ReachabilityState,
     Result,
     SiteCandidate,
+    SiteRadioProfile,
 )
 from meshscout.core.itm import evaluate_point_to_point_link
+from meshscout.core.presets import get_site_noise_penalty_db
 from meshscout.core.viewshed import haversine_distance_km
 
 
@@ -38,6 +41,11 @@ class CorridorHopResult(BaseModel):
     link_margin_db: float = Field(..., description="Fade margin in dB above receiver sensitivity")
     fresnel_clearance_ratio: float = Field(..., description="First Fresnel zone clearance ratio")
     elevation_delta_m: float = Field(..., description="Elevation change from origin to target in meters")
+    forward_margin_db: Optional[float] = Field(default=None, description="Forward (origin -> target) fade margin in dB")
+    reverse_margin_db: Optional[float] = Field(default=None, description="Reverse (target -> origin) fade margin in dB")
+    reachability_state: Optional[ReachabilityState] = Field(
+        default=None, description="Bidirectional reachability classification"
+    )
 
 
 class MultiHopCorridorResult(BaseModel):
@@ -110,6 +118,8 @@ def evaluate_multihop_corridor(
     nodes: Sequence[SiteCandidate],
     elevation_fn: Optional[Callable[[float, float], float]] = None,
     radio_config: Optional[RadioConfig] = None,
+    site_profiles: Optional[Dict[str, SiteRadioProfile]] = None,
+    min_margin_db: float = 0.0,
 ) -> Result[MultiHopCorridorResult]:
     """Evaluate an end-to-end multi-hop corridor across an ordered sequence of node candidates.
 
@@ -117,6 +127,8 @@ def evaluate_multihop_corridor(
         nodes: Ordered sequence of SiteCandidate nodes along the corridor.
         elevation_fn: Optional terrain elevation query function (lat, lon) -> elevation_m.
         radio_config: Optional RF configuration for transceivers and link budget.
+        site_profiles: Optional per-site radio and RF noise floor profiles keyed by site_id.
+        min_margin_db: Minimum fade margin threshold in dB for reachability state classification.
 
     Returns:
         Result[MultiHopCorridorResult] detailing per-hop metrics and bottleneck analysis.
@@ -147,10 +159,33 @@ def evaluate_multihop_corridor(
             elevation_fn=elevation_fn,
         )
 
-        link_eval_res = evaluate_point_to_point_link(
-            profile=profile,
-            radio=active_radio,
-        )
+        if site_profiles is None:
+            link_eval_res = evaluate_point_to_point_link(
+                profile=profile,
+                radio=active_radio,
+            )
+        else:
+            origin_prof = site_profiles.get(origin.site_id)
+            if origin_prof is None:
+                origin_prof = SiteRadioProfile(
+                    radio=active_radio,
+                    noise_penalty_db=get_site_noise_penalty_db(origin.site_type),
+                )
+            target_prof = site_profiles.get(target.site_id)
+            if target_prof is None:
+                target_prof = SiteRadioProfile(
+                    radio=active_radio,
+                    noise_penalty_db=get_site_noise_penalty_db(target.site_type),
+                )
+            link_eval_res = evaluate_point_to_point_link(
+                profile=profile,
+                radio=origin_prof.radio,
+                target_radio=target_prof.radio,
+                source_noise_penalty_db=origin_prof.noise_penalty_db,
+                target_noise_penalty_db=target_prof.noise_penalty_db,
+                client_env_loss_db=0.0,
+                min_margin_db=min_margin_db,
+            )
 
         if not link_eval_res.ok or link_eval_res.value is None:
             err_code = link_eval_res.error.code if link_eval_res.error else "LINK_EVALUATION_FAILED"
@@ -163,6 +198,27 @@ def evaluate_multihop_corridor(
         link_eval = link_eval_res.value
         elevation_delta_m = target.location.elevation_m - origin.location.elevation_m
 
+        if site_profiles is None:
+            hop_margin_db = round(link_eval.link_margin_db, 2)
+            fwd_margin_db: Optional[float] = None
+            rev_margin_db: Optional[float] = None
+            reach_state: Optional[ReachabilityState] = None
+        else:
+            dl_margin = (
+                link_eval.downlink_margin_db
+                if link_eval.downlink_margin_db is not None
+                else link_eval.link_margin_db
+            )
+            ul_margin = (
+                link_eval.uplink_margin_db
+                if link_eval.uplink_margin_db is not None
+                else link_eval.link_margin_db
+            )
+            fwd_margin_db = round(dl_margin, 2)
+            rev_margin_db = round(ul_margin, 2)
+            reach_state = link_eval.reachability_state
+            hop_margin_db = round(min(dl_margin, ul_margin), 2)
+
         hop_result = CorridorHopResult(
             hop_index=i,
             origin_site_id=origin.site_id,
@@ -171,9 +227,12 @@ def evaluate_multihop_corridor(
             target_name=target.name,
             distance_km=round(link_eval.distance_km, 2),
             has_line_of_sight=link_eval.has_line_of_sight,
-            link_margin_db=round(link_eval.link_margin_db, 2),
+            link_margin_db=hop_margin_db,
             fresnel_clearance_ratio=round(link_eval.fresnel_clearance_ratio, 2),
             elevation_delta_m=round(elevation_delta_m, 1),
+            forward_margin_db=fwd_margin_db,
+            reverse_margin_db=rev_margin_db,
+            reachability_state=reach_state,
         )
         hops.append(hop_result)
 

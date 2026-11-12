@@ -218,9 +218,13 @@ def test_manage_living_mesh_state_alignment(tmp_path: Path) -> None:
     assert "reconcile_dismantled" in props["action"]["enum"]
     assert "export_pack" in props["action"]["enum"]
     assert "import_pack" in props["action"]["enum"]
+    assert "check_reach" in props["action"]["enum"]
     assert "dismantled" in props["status"]["enum"]
     assert "pack_json" in props
     assert "pack" in props
+    assert "client_preset" in props
+    assert "client_env" in props
+    assert "home_height_agl_m" in props
 
     # 2. Verify server execution of actions
     db_file = str(tmp_path / "align_mesh.db")
@@ -301,4 +305,85 @@ def test_manage_living_mesh_state_alignment(tmp_path: Path) -> None:
     assert imp_resp is not None
     assert imp_resp["result"]["isError"] is False
     assert imp_resp["result"]["structuredContent"]["imported_count"] == 1
+
+
+def test_dual_mode_link_reach_and_presets_alignment(tmp_path: Path) -> None:
+    """Verify Day-0 MCP schema, resource, and handler alignment for dual-mode link and client reach."""
+    # 1. Verify evaluate_link_budget dual-mode schema fields
+    link_spec = next(t for t in MCP_TOOLS_MANIFEST if t["name"] == "evaluate_link_budget")
+    link_props = link_spec["inputSchema"]["properties"]
+    assert link_props["evaluation_mode"]["enum"] == ["client", "backhaul"]
+    for key in (
+        "source_preset",
+        "target_preset",
+        "client_env",
+        "protocol_profile",
+        "season_profile",
+        "source_noise_penalty_db",
+        "target_noise_penalty_db",
+    ):
+        assert key in link_props
+
+    # 2. Verify core.presets is mapped to both dual-mode tools and preset resources
+    presets_cap = DOMAIN_CAPABILITY_MAP["core.presets"]
+    assert "evaluate_link_budget" in presets_cap["tools"]
+    assert "manage_living_mesh_state" in presets_cap["tools"]
+    assert "meshscout://presets/hardware" in presets_cap["resources"]
+
+    # 3. Verify meshscout://presets/hardware exposes client_environment_profiles and site_noise_penalties_db
+    db_file = str(tmp_path / "align_reach.db")
+    server = MeshScoutMCPServer(db_path=db_file)
+
+    hw_resp = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 301,
+            "method": "resources/read",
+            "params": {"uri": "meshscout://presets/hardware"},
+        }
+    )
+    assert hw_resp is not None
+    hw_json = json.loads(hw_resp["result"]["contents"][0]["text"])
+    assert "STATION_G2_BACKBONE" in hw_json
+    assert "SENSECAP_T1000E" in hw_json
+    assert set(hw_json["client_environment_profiles"].keys()) == {
+        "OUTDOOR_CLEAR",
+        "BODY_WORN_POCKET",
+        "VEHICLE_CABIN",
+        "INDOOR_WINDOW",
+        "ROOFTOP_MAST",
+    }
+    assert hw_json["site_noise_penalties_db"]["mountain_peak"] == pytest.approx(3.0)
+
+    # 4. Verify check_reach execution returns HomeReachReport with directional margins
+    reach_resp = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 302,
+            "method": "tools/call",
+            "params": {
+                "name": "manage_living_mesh_state",
+                "arguments": {
+                    "action": "check_reach",
+                    "home_lat": 44.4759,
+                    "home_lon": -73.2121,
+                    "home_height_agl_m": 1.5,
+                    "client_preset": "SENSECAP_T1000E",
+                    "client_env": "OUTDOOR_CLEAR",
+                    "protocol_profile": "MESHTASTIC_LONGFAST",
+                    "season_profile": "SUMMER_FOLIAGE",
+                },
+            },
+        }
+    )
+    assert reach_resp is not None
+    assert reach_resp["result"]["isError"] is False
+    reach_data = reach_resp["result"]["structuredContent"]
+    assert reach_data["ok"] is True
+    assert len(reach_data["ranked_towers"]) > 0
+    sample = reach_data["ranked_towers"][0]
+    assert sample["reachability_state"] is not None
+    assert sample["uplink_margin_db"] is not None
+    assert sample["downlink_margin_db"] is not None
+
 

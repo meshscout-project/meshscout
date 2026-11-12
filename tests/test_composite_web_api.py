@@ -204,3 +204,123 @@ def test_promote_pin_to_living_registry_and_verify_in_sites(client: TestClient) 
     assert promoted["elevation_m"] == 350.0
     assert promoted["mast_height_m"] == 15.0
     assert promoted["status"] == "candidate"
+
+
+def test_composite_viewshed_directional_uplink_shrinkage_and_asymmetric_backhaul(
+    client: TestClient,
+) -> None:
+    """Verify POST /api/viewshed/composite directional uplink vs downlink shrinkage, site_presets backhaul, and 400 validation."""
+    # Legacy default keeps directional backhaul fields None
+    legacy_resp = client.post(
+        "/api/viewshed/composite",
+        json={
+            "site_ids": ["VT-CHIT-MANS-01", "VT-CHIT-BOLT-01"],
+            "max_range_km": 50.0,
+            "num_radials": 24,
+        },
+    )
+    assert legacy_resp.status_code == 200
+    legacy_comp = legacy_resp.json()["composite"]
+    assert legacy_comp["direction"] == "downlink"
+    assert legacy_comp["intersite_backhaul_links"][0]["forward_margin_db"] is None
+    assert legacy_comp["intersite_backhaul_links"][0]["reverse_margin_db"] is None
+    assert legacy_comp["intersite_backhaul_links"][0]["reachability_state"] is None
+
+    # Directional evaluation with ad-hoc commercial tower + registered summit and weak client inside vehicle cabin
+    comm_pin = {
+        "pin_id": "comm_summit_01",
+        "name": "Noisy Broadcast Ridge",
+        "lat": 44.5437,
+        "lon": -72.8143,
+        "elevation_m": 1339.0,
+        "mast_height_m": 20.0,
+        "site_type": "communications_tower",
+    }
+    tank_pin = {
+        "pin_id": "solar_tank_01",
+        "name": "Foothill Municipal Water Tank",
+        "lat": 44.4950,
+        "lon": -73.0850,
+        "elevation_m": 195.0,
+        "mast_height_m": 18.0,
+        "site_type": "water_tower",
+    }
+    base_payload = {
+        "ad_hoc_pins": [comm_pin, tank_pin],
+        "max_range_km": 130.0,
+        "num_radials": 36,
+        "client_preset": "SENSECAP_T1000E",
+        "client_env": "VEHICLE_CABIN",
+        "protocol_profile": "RETICULUM_RNODE_FAST",
+        "season_profile": "SUMMER_LEAF_ON",
+        "site_presets": {
+            "adhoc_comm_summit_01": "STATION_G2_BACKBONE",
+            "adhoc_solar_tank_01": "RAK4631_SOLAR",
+        },
+    }
+
+    dl_resp = client.post("/api/viewshed/composite", json={**base_payload, "direction": "downlink"})
+    ul_resp = client.post("/api/viewshed/composite", json={**base_payload, "direction": "uplink"})
+    tw_resp = client.post("/api/viewshed/composite", json={**base_payload, "direction": "two_way"})
+    assert dl_resp.status_code == 200
+    assert ul_resp.status_code == 200
+    assert tw_resp.status_code == 200
+
+    dl_comp = dl_resp.json()["composite"]
+    ul_comp = ul_resp.json()["composite"]
+    tw_comp = tw_resp.json()["composite"]
+
+    assert dl_comp["direction"] == "downlink"
+    assert ul_comp["direction"] == "uplink"
+    assert tw_comp["direction"] == "two_way"
+    assert ul_comp["total_illuminated_area_sq_km"] < dl_comp["total_illuminated_area_sq_km"]
+    assert tw_comp["total_illuminated_area_sq_km"] <= min(
+        ul_comp["total_illuminated_area_sq_km"],
+        dl_comp["total_illuminated_area_sq_km"],
+    )
+
+    # Intersite backhaul link populates asymmetric forward/reverse margins & reachability_state
+    bh_link = tw_comp["intersite_backhaul_links"][0]
+    assert bh_link["site_a_id"] == "adhoc_comm_summit_01"
+    assert bh_link["site_b_id"] == "adhoc_solar_tank_01"
+    assert bh_link["forward_margin_db"] is not None
+    assert bh_link["reverse_margin_db"] is not None
+    assert bh_link["reachability_state"] == "two_way"
+    assert bh_link["forward_margin_db"] - bh_link["reverse_margin_db"] == pytest.approx(11.0, abs=0.05)
+    assert bh_link["link_margin_db"] == pytest.approx(
+        min(bh_link["forward_margin_db"], bh_link["reverse_margin_db"]), abs=0.05
+    )
+
+    # Validation: HTTP 400 on invalid direction, client_env, client_preset, and site_presets
+    assert (
+        client.post(
+            "/api/viewshed/composite",
+            json={"site_ids": ["VT-CHIT-MANS-01"], "direction": "sideways"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/viewshed/composite",
+            json={"site_ids": ["VT-CHIT-MANS-01"], "client_env": "UNDERWATER"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/viewshed/composite",
+            json={"site_ids": ["VT-CHIT-MANS-01"], "client_preset": "BAD_CLIENT_HW"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/viewshed/composite",
+            json={
+                "site_ids": ["VT-CHIT-MANS-01"],
+                "site_presets": {"VT-CHIT-MANS-01": "BAD_SITE_HW"},
+            },
+        ).status_code
+        == 400
+    )
+

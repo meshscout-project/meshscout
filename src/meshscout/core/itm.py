@@ -15,6 +15,7 @@ from meshscout.core.contracts import (
     ElevationProfile,
     LinkBudgetResult,
     RadioConfig,
+    ReachabilityState,
     Result,
     SiteCandidate,
 )
@@ -373,12 +374,19 @@ def evaluate_point_to_point_link(
     profile: ElevationProfile,
     radio: Optional[RadioConfig] = None,
     k_factor: float = 4.0 / 3.0,
+    target_radio: Optional[RadioConfig] = None,
+    source_noise_penalty_db: float = 0.0,
+    target_noise_penalty_db: float = 0.0,
+    client_env_loss_db: float = 0.0,
+    min_margin_db: float = 0.0,
 ) -> Result[LinkBudgetResult]:
     """Evaluate complete point-to-point RF link budget over an elevation profile.
 
     Combines Free-Space Path Loss (FSPL), Bullington knife-edge diffraction, Longley-Rice
     ITM terrain irregularity / double-horizon shadow attenuation, and radio transceiver
-    parameters into a `Result[LinkBudgetResult]`.
+    parameters into a `Result[LinkBudgetResult]`. When `target_radio` or endpoint noise/clutter
+    losses are provided, evaluates reciprocal bidirectional downlink/uplink budgets and
+    classifies `ReachabilityState`.
     """
     if radio is None:
         radio = RadioConfig()
@@ -393,6 +401,12 @@ def evaluate_point_to_point_link(
         return Result.fail(
             code="INSUFFICIENT_PROFILE_POINTS",
             message="ElevationProfile must contain at least 2 sample points (source and target).",
+        )
+
+    if source_noise_penalty_db < 0.0 or target_noise_penalty_db < 0.0 or client_env_loss_db < 0.0:
+        return Result.fail(
+            code="INVALID_LOSS_PENALTY",
+            message="Noise penalties and client_env_loss_db must be non-negative.",
         )
 
     try:
@@ -423,21 +437,108 @@ def evaluate_point_to_point_link(
                 )
 
         diffraction_loss_db = round(bull_loss_db + itm_roughness_loss_db, 4)
-        total_path_loss_db = round(fspl_db + diffraction_loss_db + radio.environmental_clutter_db, 4)
 
-        downtilt = calculate_antenna_downtilt(
+        is_asymmetric = (
+            target_radio is not None
+            or source_noise_penalty_db > 0.0
+            or target_noise_penalty_db > 0.0
+            or client_env_loss_db > 0.0
+        )
+
+        if not is_asymmetric:
+            total_path_loss_db = round(fspl_db + diffraction_loss_db + radio.environmental_clutter_db, 4)
+
+            downtilt = calculate_antenna_downtilt(
+                source_site=profile.source_site,
+                target_site=profile.target_site,
+                distance_km=profile.distance_km,
+                antenna_gain_dbi=radio.antenna_gain_dbi,
+                k_factor=k_factor,
+            )
+
+            # Link budget equation:
+            # P_rx = P_tx + G_tx + G_rx - L_cable_tx - L_cable_rx - L_path - L_pattern
+            system_gain_db = (
+                (2.0 * radio.antenna_gain_dbi)
+                - (2.0 * radio.cable_loss_db)
+                - downtilt.pattern_attenuation_db
+            )
+            rx_power_dbm = round(radio.tx_power_dbm + system_gain_db - total_path_loss_db, 4)
+            link_margin_db = round(rx_power_dbm - radio.rx_sensitivity_dbm, 4)
+
+            return Result.success(
+                LinkBudgetResult(
+                    source_id=profile.source_site.site_id,
+                    target_id=profile.target_site.site_id,
+                    distance_km=profile.distance_km,
+                    free_space_loss_db=round(fspl_db, 4),
+                    diffraction_loss_db=diffraction_loss_db,
+                    total_path_loss_db=total_path_loss_db,
+                    rx_power_dbm=rx_power_dbm,
+                    link_margin_db=link_margin_db,
+                    has_line_of_sight=has_los,
+                    fresnel_clearance_ratio=round(fresnel_ratio, 4),
+                    downtilt_analysis=downtilt,
+                )
+            )
+
+        eff_target_radio = target_radio if target_radio is not None else radio
+        clutter_loss_db = (
+            max(radio.environmental_clutter_db, eff_target_radio.environmental_clutter_db)
+            + client_env_loss_db
+        )
+        total_path_loss_db = round(fspl_db + diffraction_loss_db + clutter_loss_db, 4)
+
+        dt_src = calculate_antenna_downtilt(
             source_site=profile.source_site,
             target_site=profile.target_site,
             distance_km=profile.distance_km,
             antenna_gain_dbi=radio.antenna_gain_dbi,
             k_factor=k_factor,
         )
+        dt_tgt = calculate_antenna_downtilt(
+            source_site=profile.target_site,
+            target_site=profile.source_site,
+            distance_km=profile.distance_km,
+            antenna_gain_dbi=eff_target_radio.antenna_gain_dbi,
+            k_factor=k_factor,
+        )
+        pattern_loss_db = dt_src.pattern_attenuation_db + dt_tgt.pattern_attenuation_db
+        downtilt = dt_tgt if dt_tgt.pattern_attenuation_db > dt_src.pattern_attenuation_db else dt_src
 
-        # Link budget equation:
-        # P_rx = P_tx + G_tx + G_rx - L_cable_tx - L_cable_rx - L_path - L_pattern
-        system_gain_db = (2.0 * radio.antenna_gain_dbi) - (2.0 * radio.cable_loss_db) - downtilt.pattern_attenuation_db
-        rx_power_dbm = round(radio.tx_power_dbm + system_gain_db - total_path_loss_db, 4)
-        link_margin_db = round(rx_power_dbm - radio.rx_sensitivity_dbm, 4)
+        passive_gain_db = (
+            radio.antenna_gain_dbi
+            + eff_target_radio.antenna_gain_dbi
+            - radio.cable_loss_db
+            - eff_target_radio.cable_loss_db
+            - pattern_loss_db
+        )
+
+        downlink_rx_dbm = round(radio.tx_power_dbm + passive_gain_db - total_path_loss_db, 4)
+        downlink_margin_db = round(
+            downlink_rx_dbm - (eff_target_radio.rx_sensitivity_dbm + target_noise_penalty_db),
+            4,
+        )
+
+        uplink_rx_dbm = round(eff_target_radio.tx_power_dbm + passive_gain_db - total_path_loss_db, 4)
+        uplink_margin_db = round(
+            uplink_rx_dbm - (radio.rx_sensitivity_dbm + source_noise_penalty_db),
+            4,
+        )
+
+        asymmetry_delta_db = round(downlink_margin_db - uplink_margin_db, 4)
+
+        if downlink_margin_db >= min_margin_db and uplink_margin_db >= min_margin_db:
+            reach_state = ReachabilityState.TWO_WAY
+        elif downlink_margin_db >= min_margin_db > uplink_margin_db:
+            reach_state = ReachabilityState.HEAR_ONLY_ALLIGATOR
+        elif uplink_margin_db >= min_margin_db > downlink_margin_db:
+            reach_state = ReachabilityState.UPLINK_ONLY
+        else:
+            reach_state = ReachabilityState.UNREACHABLE
+
+        rx_power_dbm = min(downlink_rx_dbm, uplink_rx_dbm)
+        link_margin_db = min(downlink_margin_db, uplink_margin_db)
 
         return Result.success(
             LinkBudgetResult(
@@ -452,6 +553,12 @@ def evaluate_point_to_point_link(
                 has_line_of_sight=has_los,
                 fresnel_clearance_ratio=round(fresnel_ratio, 4),
                 downtilt_analysis=downtilt,
+                downlink_rx_dbm=downlink_rx_dbm,
+                downlink_margin_db=downlink_margin_db,
+                uplink_rx_dbm=uplink_rx_dbm,
+                uplink_margin_db=uplink_margin_db,
+                asymmetry_delta_db=asymmetry_delta_db,
+                reachability_state=reach_state,
             )
         )
     except Exception as exc:

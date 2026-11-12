@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import warnings
 import pytest
-from fastapi.testclient import TestClient
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message=".*BlockingPortal.*", category=DeprecationWarning)
+    from fastapi.testclient import TestClient
 
 from meshscout.web.app import create_web_app
 
@@ -2221,6 +2225,511 @@ def test_tutorial_walkthrough_covers_all_eight_tabs(client: TestClient) -> None:
     assert "Core Planning Engines (Tabs 1–5)" in js
     assert "#tab-packs-btn" in js
     assert '[data-tab="tab-advisor"]' in js
+
+
+def test_evaluate_link_client_mode_alligator_and_orientation(client: TestClient) -> None:
+    """Verify POST /api/link client mode keeps Home->Tower Fresnel orientation and detects alligator links."""
+    # 0. Legacy symmetric baseline keeps asymmetric fields None
+    legacy_resp = client.post(
+        "/api/link",
+        json={
+            "target_site_id": "VT-PEAK-01",
+            "hardware_preset": "RAK4631_SOLAR",
+            "protocol_profile": "MESHTASTIC_LONGFAST",
+            "season_profile": "WINTER_LEAF_OFF",
+        },
+    )
+    assert legacy_resp.status_code == 200
+    legacy_data = legacy_resp.json()
+    assert legacy_data["evaluation_mode"] is None
+    assert legacy_data["source_preset"] is None
+    assert legacy_data["target_preset"] is None
+    assert legacy_data["client_preset"] is None
+    assert legacy_data["client_env"] is None
+    assert legacy_data["link_budget"]["downlink_margin_db"] is None
+    assert legacy_data["link_budget"]["uplink_margin_db"] is None
+    assert legacy_data["link_budget"]["reachability_state"] is None
+
+    # 1. Create a noisy commercial communications tower with high-power Station G2
+    tower_create = client.post(
+        "/api/sites/custom",
+        json={
+            "name": "Noisy Summit Telecom Tower",
+            "lat": 44.5437,
+            "lon": -72.8143,
+            "elevation_m": 1339.0,
+            "mast_height_m": 20.0,
+            "site_type": "communications_tower",
+            "hardware_preset": "STATION_G2_BACKBONE",
+            "status": "active_on_air",
+        },
+    )
+    assert tower_create.status_code == 200
+    tower_id = tower_create.json()["site"]["site_id"]
+
+    # Place handheld pocket client behind the Green Mountain spine (eastern valley shadow)
+    # where high-power 28 dBm tower downlink reaches client, but 20 dBm client uplink fails
+    # against the tower's +6 dB RF noise floor penalty (14 dB asymmetry delta).
+    alligator_resp = client.post(
+        "/api/link",
+        json={
+            "evaluation_mode": "client",
+            "source_lat": 44.5437,
+            "source_lon": -72.5200,
+            "source_elev_m": 190.0,
+            "source_mast_m": 1.2,
+            "target_site_id": tower_id,
+            "client_preset": "SENSECAP_T1000E",
+            "client_env": "INDOOR_WINDOW",
+            "protocol_profile": "RETICULUM_RNODE_FAST",
+            "season_profile": "SUMMER_LEAF_ON",
+        },
+    )
+    assert alligator_resp.status_code == 200
+    adata = alligator_resp.json()
+    assert adata["ok"] is True
+    assert adata["evaluation_mode"] == "client"
+    assert adata["client_preset"] == "SENSECAP_T1000E"
+    assert adata["client_env"] == "INDOOR_WINDOW"
+    assert adata["target_preset"] == "STATION_G2_BACKBONE"
+
+    budget = adata["link_budget"]
+    assert budget["source_id"] == "HOME-NODE"
+    assert budget["target_id"] == tower_id
+    # Asymmetry = (28.0 - 20.0) TX delta + 6.0 dB comm tower noise penalty = 14.0 dB
+    assert budget["asymmetry_delta_db"] == pytest.approx(14.0, abs=0.05)
+    assert budget["downlink_margin_db"] > budget["uplink_margin_db"]
+
+    # If path loss leaves both margins positive or negative, sweep source_lon east until alligator band hits
+    if budget["reachability_state"] != "hear_only_alligator":
+        found_alligator = False
+        for lon_test in (-72.60, -72.55, -72.45, -72.35, -72.20, -72.05, -71.90):
+            probe = client.post(
+                "/api/link",
+                json={
+                    "evaluation_mode": "client",
+                    "source_lat": 44.5437,
+                    "source_lon": lon_test,
+                    "source_elev_m": 180.0,
+                    "source_mast_m": 1.2,
+                    "target_site_id": tower_id,
+                    "client_preset": "SENSECAP_T1000E",
+                    "client_env": "INDOOR_WINDOW",
+                    "protocol_profile": "RETICULUM_RNODE_FAST",
+                    "season_profile": "SUMMER_LEAF_ON",
+                },
+            ).json()
+            pb = probe["link_budget"]
+            if pb["reachability_state"] == "hear_only_alligator":
+                adata = probe
+                budget = pb
+                found_alligator = True
+                break
+        assert found_alligator, f"Expected hear_only_alligator across shadow transect, last={budget}"
+
+    assert budget["reachability_state"] == "hear_only_alligator"
+    assert budget["downlink_margin_db"] >= 0.0
+    assert budget["uplink_margin_db"] < 0.0
+
+    # Orientation check: Fresnel & profile_points stay Home (left) -> Tower (right)
+    fa = adata["fresnel_analysis"]
+    assert fa["source_id"] == "HOME-NODE"
+    assert fa["target_id"] == tower_id
+    pts = adata["profile_points"]
+    assert len(pts) == 25
+    assert pts[0]["distance_m"] == pytest.approx(0.0, abs=0.01)
+    assert pts[0]["terrain_elev_m"] < 300.0
+    assert pts[-1]["terrain_elev_m"] == pytest.approx(1339.0, abs=0.5)
+
+    # Validation checks: HTTP 400 on invalid client_env or evaluation_mode
+    bad_env = client.post(
+        "/api/link",
+        json={"evaluation_mode": "client", "target_site_id": "VT-PEAK-01", "client_env": "SUBMARINE"},
+    )
+    assert bad_env.status_code == 400
+
+    bad_mode = client.post(
+        "/api/link",
+        json={"evaluation_mode": "invalid_mode", "target_site_id": "VT-PEAK-01"},
+    )
+    assert bad_mode.status_code == 400
+
+
+def test_evaluate_link_backhaul_mode_clutter_zero_and_preset_fallback(
+    client: TestClient,
+) -> None:
+    """Verify POST /api/link backhaul mode forces client clutter to 0 dB and honors node preset fallback."""
+    # Set VT-PEAK-01 registered hardware_preset to STATION_G2_BACKBONE
+    upd = client.post(
+        "/api/sites/status",
+        json={
+            "site_id": "VT-PEAK-01",
+            "status": "active_on_air",
+            "hardware_preset": "STATION_G2_BACKBONE",
+        },
+    )
+    assert upd.status_code == 200
+
+    # Switch Rutland county in so VT-RUT-01 is registered with default RAK4631_SOLAR
+    client.post("/api/counties/switch", json={"county": "rutland"})
+
+    bh_clean = client.post(
+        "/api/link",
+        json={
+            "evaluation_mode": "backhaul",
+            "source_site_id": "VT-PEAK-01",
+            "target_site_id": "VT-RUT-01",
+            "protocol_profile": "MESHCORE_NARROW",
+            "season_profile": "WINTER_LEAF_OFF",
+        },
+    )
+    assert bh_clean.status_code == 200
+    d_clean = bh_clean.json()
+    assert d_clean["evaluation_mode"] == "backhaul"
+    # Fallback resolved Site A from RegisteredNode (STATION_G2_BACKBONE) and Site B (RAK4631_SOLAR)
+    assert d_clean["source_preset"] == "STATION_G2_BACKBONE"
+    assert d_clean["target_preset"] == "RAK4631_SOLAR"
+    assert d_clean["client_env"] is None
+    assert (
+        d_clean["link_budget"]["downlink_margin_db"]
+        > d_clean["link_budget"]["uplink_margin_db"]
+    )
+
+    # Sending client_env="INDOOR_WINDOW" (8 dB) in backhaul mode MUST be ignored (forced to 0.0 dB)
+    bh_with_env = client.post(
+        "/api/link",
+        json={
+            "evaluation_mode": "backhaul",
+            "source_site_id": "VT-PEAK-01",
+            "target_site_id": "VT-RUT-01",
+            "client_env": "INDOOR_WINDOW",
+            "protocol_profile": "MESHCORE_NARROW",
+            "season_profile": "WINTER_LEAF_OFF",
+        },
+    )
+    assert bh_with_env.status_code == 200
+    d_env = bh_with_env.json()
+    assert d_env["client_env"] is None
+    assert d_env["link_budget"]["total_path_loss_db"] == pytest.approx(
+        d_clean["link_budget"]["total_path_loss_db"], abs=1e-4
+    )
+    assert d_env["link_budget"]["downlink_margin_db"] == pytest.approx(
+        d_clean["link_budget"]["downlink_margin_db"], abs=1e-4
+    )
+
+    # Explicit request source_preset / target_preset overrides RegisteredNode.hardware_preset
+    bh_override = client.post(
+        "/api/link",
+        json={
+            "source_site_id": "VT-PEAK-01",
+            "target_site_id": "VT-RUT-01",
+            "source_preset": "HELTEC_V3_HOME",
+            "target_preset": "STATION_G2_BACKBONE",
+            "protocol_profile": "MESHCORE_NARROW",
+            "season_profile": "WINTER_LEAF_OFF",
+        },
+    )
+    assert bh_override.status_code == 200
+    d_ovr = bh_override.json()
+    assert d_ovr["evaluation_mode"] == "backhaul"
+    assert d_ovr["source_preset"] == "HELTEC_V3_HOME"
+    assert d_ovr["target_preset"] == "STATION_G2_BACKBONE"
+    assert (
+        d_ovr["link_budget"]["uplink_margin_db"]
+        > d_ovr["link_budget"]["downlink_margin_db"]
+    )
+
+
+def test_post_viewshed_directional_shrinkage_and_validation(client: TestClient) -> None:
+    """Verify POST /api/viewshed shrinks coverage on uplink/two_way for weak clients and returns 400 on bad inputs."""
+    common_payload = {
+        "site_id": "VT-PEAK-01",
+        "num_radials": 36,
+        "max_range_km": 120.0,
+        "hardware_preset": "STATION_G2_BACKBONE",
+        "client_preset": "SENSECAP_T1000E",
+        "client_env": "INDOOR_WINDOW",
+        "protocol_profile": "RETICULUM_RNODE_FAST",
+        "season_profile": "SUMMER_LEAF_ON",
+    }
+    dl_resp = client.post("/api/viewshed", json={**common_payload, "direction": "downlink"})
+    ul_resp = client.post("/api/viewshed", json={**common_payload, "direction": "uplink"})
+    tw_resp = client.post("/api/viewshed", json={**common_payload, "direction": "two_way"})
+
+    assert dl_resp.status_code == 200
+    assert ul_resp.status_code == 200
+    assert tw_resp.status_code == 200
+
+    dl_vs = dl_resp.json()["viewshed"]
+    ul_vs = ul_resp.json()["viewshed"]
+    tw_vs = tw_resp.json()["viewshed"]
+
+    assert dl_vs["direction"] == "downlink"
+    assert ul_vs["direction"] == "uplink"
+    assert tw_vs["direction"] == "two_way"
+    assert ul_vs["diffracted_area_sq_km"] < dl_vs["diffracted_area_sq_km"]
+    assert tw_vs["diffracted_area_sq_km"] == pytest.approx(ul_vs["diffracted_area_sq_km"], abs=0.1)
+
+    bad_dir = client.post("/api/viewshed", json={"site_id": "VT-PEAK-01", "direction": "diagonal"})
+    assert bad_dir.status_code == 400
+
+    bad_env = client.post("/api/viewshed", json={"site_id": "VT-PEAK-01", "client_env": "SPACE_VACUUM"})
+    assert bad_env.status_code == 400
+
+
+def test_home_check_asymmetric_client_reach(client: TestClient) -> None:
+    """Verify POST /api/home-check evaluates asymmetric client reach and applies client_env default AGL."""
+    client.post(
+        "/api/sites/status",
+        json={
+            "site_id": "VT-PEAK-01",
+            "status": "active_on_air",
+            "hardware_preset": "STATION_G2_BACKBONE",
+        },
+    )
+
+    resp = client.post(
+        "/api/home-check",
+        json={
+            "home_lat": 44.4906,
+            "home_lon": -73.1112,
+            "home_elev_m": 108.0,
+            "client_preset": "SENSECAP_T1000E",
+            "client_env": "INDOOR_WINDOW",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    # INDOOR_WINDOW default_agl_m is 2.0m when home_height_agl_m is omitted
+    assert data["home_height_agl_m"] == pytest.approx(2.0, abs=1e-4)
+    assert len(data["ranked_towers"]) >= 33
+
+    mansfield = next(t for t in data["ranked_towers"] if t["site_id"] == "VT-PEAK-01")
+    assert mansfield["downlink_margin_db"] is not None
+    assert mansfield["uplink_margin_db"] is not None
+    assert mansfield["reachability_state"] in (
+        "two_way",
+        "hear_only_alligator",
+        "uplink_only",
+        "unreachable",
+    )
+    assert mansfield["downlink_margin_db"] > mansfield["uplink_margin_db"]
+
+    # Explicit home_height_agl_m overrides client_env default_agl_m
+    override_resp = client.post(
+        "/api/home-check",
+        json={
+            "home_lat": 44.4906,
+            "home_lon": -73.1112,
+            "home_elev_m": 108.0,
+            "home_height_agl_m": 9.5,
+            "client_preset": "SENSECAP_T1000E",
+            "client_env": "INDOOR_WINDOW",
+            "persist_height": False,
+        },
+    )
+    assert override_resp.status_code == 200
+    assert override_resp.json()["home_height_agl_m"] == pytest.approx(9.5, abs=1e-4)
+
+    bad_env = client.post("/api/home-check", json={"client_env": "UNKNOWN_ENV"})
+    assert bad_env.status_code == 400
+
+
+def test_post_mesh_route_rejects_alligator_bridge_repeater(client: TestClient) -> None:
+    """Verify POST /api/mesh/route with origin_client_preset + client_env + site_presets rejects alligator relays."""
+    # Place isolated northern test cluster (~200 km north of bundled VT fixtures) across the synthetic spine (-72.8143)
+    origin_resp = client.post(
+        "/api/sites/custom",
+        json={
+            "name": "West Basin Pocket Client",
+            "lat": 46.8000,
+            "lon": -73.0200,
+            "elevation_m": 150.0,
+            "mast_height_m": 1.5,
+            "site_type": "custom",
+            "hardware_preset": "SENSECAP_T1000E",
+        },
+    )
+    dest_resp = client.post(
+        "/api/sites/custom",
+        json={
+            "name": "East Basin Emergency Hub",
+            "lat": 46.8000,
+            "lon": -72.6000,
+            "elevation_m": 245.0,
+            "mast_height_m": 12.0,
+            "site_type": "building_rooftop",
+            "hardware_preset": "STATION_G2_BACKBONE",
+        },
+    )
+    alligator_resp = client.post(
+        "/api/sites/custom",
+        json={
+            "name": "High-Noise Commercial Spine Tower",
+            "lat": 46.8050,
+            "lon": -72.8143,
+            "elevation_m": 1190.0,
+            "mast_height_m": 20.0,
+            "site_type": "communications_tower",
+            "hardware_preset": "STATION_G2_BACKBONE",
+        },
+    )
+    assert origin_resp.status_code == 200
+    assert dest_resp.status_code == 200
+    assert alligator_resp.status_code == 200
+
+    origin_id = origin_resp.json()["site"]["site_id"]
+    dest_id = dest_resp.json()["site"]["site_id"]
+    alligator_id = alligator_resp.json()["site"]["site_id"]
+
+    # Measure exact asymmetric margins on origin <-> alligator_id via /api/link to set min_link_margin_db in the alligator band
+    link_probe = client.post(
+        "/api/link",
+        json={
+            "evaluation_mode": "client",
+            "source_lat": 46.8000,
+            "source_lon": -73.0200,
+            "source_elev_m": 150.0,
+            "source_mast_m": 1.5,
+            "target_site_id": alligator_id,
+            "client_preset": "SENSECAP_T1000E",
+            "client_env": "INDOOR_WINDOW",
+            "protocol_profile": "RETICULUM_RNODE_FAST",
+            "season_profile": "SUMMER_LEAF_ON",
+        },
+    )
+    assert link_probe.status_code == 200
+    lb = link_probe.json()["link_budget"]
+    assert lb["downlink_margin_db"] > lb["uplink_margin_db"]
+    # Threshold sits strictly between client uplink margin and 28 dBm tower downlink margin
+    threshold_db = round((lb["downlink_margin_db"] + lb["uplink_margin_db"]) / 2.0, 1)
+    assert lb["uplink_margin_db"] < threshold_db < lb["downlink_margin_db"]
+
+    # 1. Legacy symmetric route (omitting dual-mode params) accepts the 28 dBm spine repeater:
+    sym_route_resp = client.post(
+        "/api/mesh/route",
+        json={
+            "origin_site_id": origin_id,
+            "destination_site_id": dest_id,
+            "max_hops": 3,
+            "min_link_margin_db": threshold_db,
+            "hardware_preset": "STATION_G2_BACKBONE",
+            "protocol_profile": "RETICULUM_RNODE_FAST",
+            "season_profile": "SUMMER_LEAF_ON",
+        },
+    )
+    assert sym_route_resp.status_code == 200
+    sym_route = sym_route_resp.json()["route"]
+    assert sym_route["route_found"] is True
+    assert sym_route["intermediate_node_ids"] == [alligator_id]
+    assert sym_route["legs"][0]["forward_margin_db"] is None
+    assert sym_route["legs"][0]["reachability_state"] is None
+
+    # 2. Asymmetric client route with origin_client_preset + client_env + site_presets REJECTS the alligator repeater:
+    asym_reject_resp = client.post(
+        "/api/mesh/route",
+        json={
+            "origin_site_id": origin_id,
+            "destination_site_id": dest_id,
+            "max_hops": 3,
+            "min_link_margin_db": threshold_db,
+            "hardware_preset": "STATION_G2_BACKBONE",
+            "protocol_profile": "RETICULUM_RNODE_FAST",
+            "season_profile": "SUMMER_LEAF_ON",
+            "origin_client_preset": "SENSECAP_T1000E",
+            "client_env": "INDOOR_WINDOW",
+            "site_presets": {
+                alligator_id: "STATION_G2_BACKBONE",
+                dest_id: "STATION_G2_BACKBONE",
+            },
+        },
+    )
+    assert asym_reject_resp.status_code == 200
+    assert asym_reject_resp.json()["route"]["route_found"] is False
+
+    # 3. Adding a quiet municipal water_tower relay on the spine (+5 dB cleaner noise floor) allows two-way closure
+    civic_resp = client.post(
+        "/api/sites/custom",
+        json={
+            "name": "Quiet Municipal Spine Water Tower",
+            "lat": 46.7980,
+            "lon": -72.8143,
+            "elevation_m": 1190.0,
+            "mast_height_m": 20.0,
+            "site_type": "water_tower",
+            "hardware_preset": "STATION_G2_BACKBONE",
+        },
+    )
+    assert civic_resp.status_code == 200
+    civic_id = civic_resp.json()["site"]["site_id"]
+
+    # Adjust threshold so quiet water_tower (+5 dB better uplink SNR than noisy comm tower) passes while comm tower still fails
+    civic_threshold_db = round(lb["uplink_margin_db"] + 2.5, 1)
+    asym_civic_resp = client.post(
+        "/api/mesh/route",
+        json={
+            "origin_site_id": origin_id,
+            "destination_site_id": dest_id,
+            "max_hops": 3,
+            "min_link_margin_db": civic_threshold_db,
+            "hardware_preset": "STATION_G2_BACKBONE",
+            "protocol_profile": "RETICULUM_RNODE_FAST",
+            "season_profile": "SUMMER_LEAF_ON",
+            "origin_client_preset": "SENSECAP_T1000E",
+            "client_env": "INDOOR_WINDOW",
+            "site_presets": {
+                alligator_id: "STATION_G2_BACKBONE",
+                civic_id: "STATION_G2_BACKBONE",
+                dest_id: "STATION_G2_BACKBONE",
+            },
+        },
+    )
+    assert asym_civic_resp.status_code == 200
+    civic_route = asym_civic_resp.json()["route"]
+    assert civic_route["route_found"] is True
+    assert civic_route["intermediate_node_ids"] == [civic_id]
+    for leg in civic_route["legs"]:
+        assert leg["forward_margin_db"] is not None
+        assert leg["reverse_margin_db"] is not None
+        assert leg["reachability_state"] == "two_way"
+        assert min(leg["forward_margin_db"], leg["reverse_margin_db"]) >= civic_threshold_db
+
+    # 4. Validation: HTTP 400 on invalid origin_client_preset, client_env, and site_presets
+    assert (
+        client.post(
+            "/api/mesh/route",
+            json={
+                "origin_site_id": origin_id,
+                "destination_site_id": dest_id,
+                "origin_client_preset": "INVALID_RADIO",
+            },
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/mesh/route",
+            json={
+                "origin_site_id": origin_id,
+                "destination_site_id": dest_id,
+                "client_env": "INVALID_ENV",
+            },
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/mesh/route",
+            json={
+                "origin_site_id": origin_id,
+                "destination_site_id": dest_id,
+                "site_presets": {alligator_id: "INVALID_SITE_PRESET"},
+            },
+        ).status_code
+        == 400
+    )
+
 
 
 

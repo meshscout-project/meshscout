@@ -10,6 +10,7 @@ from meshscout.core.contracts import (
     ElevationPoint,
     ElevationProfile,
     RadioConfig,
+    ReachabilityState,
     SiteCandidate,
     SiteType,
 )
@@ -19,6 +20,12 @@ from meshscout.core.itm import (
     extract_qlrpfl_parameters,
     free_space_path_loss_db,
     knife_edge_diffraction_loss_db,
+)
+from meshscout.core.presets import (
+    CLIENT_ENVIRONMENT_PROFILES,
+    build_radio_config,
+    get_site_noise_penalty_db,
+    resolve_site_radio_profile,
 )
 
 
@@ -319,3 +326,276 @@ class TestLinkBudgetEvaluation:
         dt_3dbi = calculate_antenna_downtilt(peak, valley, distance_km=8.0, antenna_gain_dbi=3.0)
         assert dt_3dbi.vertical_beamwidth_deg == 55.0
         assert dt_3dbi.is_overshooting is False
+
+
+class TestBidirectionalAsymmetricLinkBudget:
+    """Tests for bidirectional asymmetric link budgets, reciprocity, clutter deduplication, and alligator detection."""
+
+    def test_legacy_symmetric_parity_when_optional_args_omitted(self) -> None:
+        """Verify omitting target_radio and noise/client losses preserves exact legacy None fields."""
+        profile = _build_synthetic_profile(
+            distance_km=10.0,
+            num_points=51,
+            elev_fn=lambda d_m, total_m: 150.0,
+            tx_mast_m=10.0,
+            rx_mast_m=10.0,
+        )
+        radio = build_radio_config("RAK4631_SOLAR", "MESHTASTIC_LONGFAST", "WINTER_LEAF_OFF").value
+        assert radio is not None
+
+        legacy_res = evaluate_point_to_point_link(profile, radio=radio)
+        assert legacy_res.ok and legacy_res.value is not None
+        leg = legacy_res.value
+        assert leg.downlink_rx_dbm is None
+        assert leg.downlink_margin_db is None
+        assert leg.uplink_rx_dbm is None
+        assert leg.uplink_margin_db is None
+        assert leg.asymmetry_delta_db is None
+        assert leg.reachability_state is None
+
+        # Supplying identical target_radio with 0 penalties yields exact scalar parity + populated directional fields
+        explicit_sym_res = evaluate_point_to_point_link(profile, radio=radio, target_radio=radio)
+        assert explicit_sym_res.ok and explicit_sym_res.value is not None
+        sym = explicit_sym_res.value
+        assert sym.rx_power_dbm == pytest.approx(leg.rx_power_dbm)
+        assert sym.link_margin_db == pytest.approx(leg.link_margin_db)
+        assert sym.downlink_rx_dbm == pytest.approx(leg.rx_power_dbm)
+        assert sym.uplink_rx_dbm == pytest.approx(leg.rx_power_dbm)
+        assert sym.downlink_margin_db == pytest.approx(leg.link_margin_db)
+        assert sym.uplink_margin_db == pytest.approx(leg.link_margin_db)
+        assert sym.asymmetry_delta_db == pytest.approx(0.0)
+        assert sym.reachability_state == ReachabilityState.TWO_WAY
+
+    def test_reversed_endpoint_reciprocity_on_steep_valley_to_8dbi_summit(self) -> None:
+        """Verify valley->8dBi summit and 8dBi summit->valley produce identical pattern loss and swapped directions."""
+        summit = SiteCandidate(
+            site_id="VT-SUMMIT-8DBI",
+            name="Mount Mansfield 8dBi Backbone",
+            location=Coordinate(lat=44.5437, lon=-72.8143, elevation_m=1339.0),
+            site_type=SiteType.MOUNTAIN_PEAK,
+            mast_height_m=15.0,
+        )
+        valley = SiteCandidate(
+            site_id="VT-VALLEY-POCKET",
+            name="Underhill Hiker Pocket Node",
+            location=Coordinate(lat=44.5275, lon=-72.8950, elevation_m=215.0),
+            site_type=SiteType.CUSTOM,
+            mast_height_m=1.5,
+        )
+        dist_km = 8.0
+        total_m = dist_km * 1000.0
+        num_pts = 81
+
+        fwd_points = []
+        for i in range(num_pts):
+            frac = i / (num_pts - 1)
+            d_m = frac * total_m
+            # Concave mountain slope from 1339m down to 215m
+            elev = 215.0 + (1339.0 - 215.0) * ((1.0 - frac) ** 1.5)
+            lat = summit.location.lat + frac * (valley.location.lat - summit.location.lat)
+            lon = summit.location.lon + frac * (valley.location.lon - summit.location.lon)
+            fwd_points.append(
+                ElevationPoint(
+                    distance_m=d_m,
+                    elevation_m=elev,
+                    coordinate=Coordinate(lat=lat, lon=lon, elevation_m=elev),
+                )
+            )
+
+        rev_points = [
+            ElevationPoint(
+                distance_m=round(total_m - pt.distance_m, 6),
+                elevation_m=pt.elevation_m,
+                coordinate=pt.coordinate,
+            )
+            for pt in reversed(fwd_points)
+        ]
+
+        profile_summit_to_valley = ElevationProfile(
+            source_site=summit,
+            target_site=valley,
+            distance_km=dist_km,
+            points=fwd_points,
+        )
+        profile_valley_to_summit = ElevationProfile(
+            source_site=valley,
+            target_site=summit,
+            distance_km=dist_km,
+            points=rev_points,
+        )
+
+        summit_radio = build_radio_config("STATION_G2_BACKBONE", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+        valley_radio = build_radio_config("SENSECAP_T1000E", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+        assert summit_radio is not None and valley_radio is not None
+
+        fwd_res = evaluate_point_to_point_link(
+            profile_summit_to_valley,
+            radio=summit_radio,
+            target_radio=valley_radio,
+            source_noise_penalty_db=3.0,
+            target_noise_penalty_db=0.0,
+            client_env_loss_db=4.0,
+        )
+        rev_res = evaluate_point_to_point_link(
+            profile_valley_to_summit,
+            radio=valley_radio,
+            target_radio=summit_radio,
+            source_noise_penalty_db=0.0,
+            target_noise_penalty_db=3.0,
+            client_env_loss_db=4.0,
+        )
+        assert fwd_res.ok and fwd_res.value is not None
+        assert rev_res.ok and rev_res.value is not None
+        fwd = fwd_res.value
+        rev = rev_res.value
+
+        # Both call orders detect the summit 8 dBi vertical beamwidth overshoot!
+        assert fwd.downtilt_analysis is not None and rev.downtilt_analysis is not None
+        assert fwd.downtilt_analysis.is_overshooting is True
+        assert rev.downtilt_analysis.is_overshooting is True
+        assert fwd.downtilt_analysis.pattern_attenuation_db > 0.0
+        assert fwd.downtilt_analysis.pattern_attenuation_db == pytest.approx(
+            rev.downtilt_analysis.pattern_attenuation_db
+        )
+
+        # Total path loss and conservative two-way scalars are 100% order-invariant
+        assert fwd.total_path_loss_db == pytest.approx(rev.total_path_loss_db, abs=1e-4)
+        assert fwd.rx_power_dbm == pytest.approx(rev.rx_power_dbm, abs=1e-4)
+        assert fwd.link_margin_db == pytest.approx(rev.link_margin_db, abs=1e-4)
+
+        # Directional budgets swap cleanly across call order
+        assert fwd.downlink_rx_dbm == pytest.approx(rev.uplink_rx_dbm, abs=1e-4)
+        assert fwd.uplink_rx_dbm == pytest.approx(rev.downlink_rx_dbm, abs=1e-4)
+        assert fwd.downlink_margin_db == pytest.approx(rev.uplink_margin_db, abs=1e-4)
+        assert fwd.uplink_margin_db == pytest.approx(rev.downlink_margin_db, abs=1e-4)
+        assert fwd.asymmetry_delta_db == pytest.approx(-rev.asymmetry_delta_db, abs=1e-4)
+
+    def test_single_path_clutter_non_double_counting(self) -> None:
+        """Verify seasonal canopy loss and client_env_loss_db are each applied once per path."""
+        profile = _build_synthetic_profile(
+            distance_km=12.0,
+            num_points=61,
+            elev_fn=lambda d_m, total_m: 200.0,
+            tx_mast_m=15.0,
+            rx_mast_m=2.0,
+        )
+        tx_winter = build_radio_config("STATION_G2_BACKBONE", "MESHTASTIC_LONGFAST", "WINTER_LEAF_OFF").value
+        rx_winter = build_radio_config("SENSECAP_T1000E", "MESHTASTIC_LONGFAST", "WINTER_LEAF_OFF").value
+        tx_summer = build_radio_config("STATION_G2_BACKBONE", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+        rx_summer = build_radio_config("SENSECAP_T1000E", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+        assert tx_winter and rx_winter and tx_summer and rx_summer
+
+        pocket_loss_db = CLIENT_ENVIRONMENT_PROFILES["BODY_WORN_POCKET"].clutter_loss_db  # 4.0 dB
+
+        base_res = evaluate_point_to_point_link(
+            profile,
+            radio=tx_winter,
+            target_radio=rx_winter,
+            client_env_loss_db=0.0,
+        )
+        summer_pocket_res = evaluate_point_to_point_link(
+            profile,
+            radio=tx_summer,
+            target_radio=rx_summer,
+            client_env_loss_db=pocket_loss_db,
+        )
+        assert base_res.ok and base_res.value is not None
+        assert summer_pocket_res.ok and summer_pocket_res.value is not None
+
+        # Seasonal canopy (8.5 dB) + body-worn pocket (4.0 dB) = 12.5 dB total delta (not 17.0 + 4.0 = 21.0 dB)
+        path_loss_delta = round(
+            summer_pocket_res.value.total_path_loss_db - base_res.value.total_path_loss_db,
+            4,
+        )
+        assert path_loss_delta == pytest.approx(8.5 + 4.0, abs=1e-4)
+
+    def test_asymmetry_delta_exact_formula_independent_of_antenna_gain(self) -> None:
+        """Verify asymmetry_delta_db == (28.0 - 20.0) + site_noise_penalty_db for G2 vs T1000-E across antenna gains."""
+        profile = _build_synthetic_profile(
+            distance_km=15.0,
+            num_points=61,
+            elev_fn=lambda d_m, total_m: 300.0,
+            tx_mast_m=20.0,
+            rx_mast_m=1.5,
+        )
+        t1000e = build_radio_config("SENSECAP_T1000E", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+        assert t1000e is not None
+
+        for site_type in (
+            SiteType.COMMUNICATIONS_TOWER,
+            SiteType.MOUNTAIN_PEAK,
+            SiteType.WATER_TOWER,
+        ):
+            site_prof = resolve_site_radio_profile(
+                site_type=site_type,
+                hardware_id="STATION_G2_BACKBONE",
+                protocol_id="MESHTASTIC_LONGFAST",
+                season_id="SUMMER_FOLIAGE",
+            ).value
+            assert site_prof is not None
+            site_noise_penalty_db = get_site_noise_penalty_db(site_type)
+
+            for test_gain_dbi in (1.5, 5.8, 8.0, 10.0):
+                g2_variant = site_prof.radio.model_copy(update={"antenna_gain_dbi": test_gain_dbi})
+                res = evaluate_point_to_point_link(
+                    profile,
+                    radio=g2_variant,
+                    target_radio=t1000e,
+                    source_noise_penalty_db=site_noise_penalty_db,
+                    client_env_loss_db=4.0,
+                )
+                assert res.ok and res.value is not None
+                assert res.value.asymmetry_delta_db == (28.0 - 20.0) + site_noise_penalty_db
+
+    def test_hear_only_alligator_uplink_only_and_unreachable_states(self) -> None:
+        """Verify ReachabilityState classification across hear_only_alligator, uplink_only, and unreachable regimes."""
+        profile = _build_synthetic_profile(
+            distance_km=35.0,
+            num_points=71,
+            elev_fn=lambda d_m, total_m: 250.0,
+            tx_mast_m=30.0,
+            rx_mast_m=1.5,
+        )
+        g2_radio = build_radio_config("STATION_G2_BACKBONE", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+        t1000e_radio = build_radio_config("SENSECAP_T1000E", "MESHTASTIC_LONGFAST", "SUMMER_LEAF_ON").value
+        assert g2_radio is not None and t1000e_radio is not None
+
+        # High-power noisy comm tower -> pocket client inside heavy clutter: downlink >= 0 > uplink
+        alligator_res = evaluate_point_to_point_link(
+            profile,
+            radio=g2_radio,
+            target_radio=t1000e_radio,
+            source_noise_penalty_db=6.0,
+            client_env_loss_db=30.0,
+        )
+        assert alligator_res.ok and alligator_res.value is not None
+        alg = alligator_res.value
+        assert alg.downlink_margin_db is not None and alg.uplink_margin_db is not None
+        assert alg.downlink_margin_db >= 0.0
+        assert alg.uplink_margin_db < 0.0
+        assert alg.reachability_state == ReachabilityState.HEAR_ONLY_ALLIGATOR
+        assert alg.link_margin_db == pytest.approx(alg.uplink_margin_db)
+        assert alg.rx_power_dbm == pytest.approx(min(alg.downlink_rx_dbm, alg.uplink_rx_dbm))
+
+        # Reversing source/target turns the same link into UPLINK_ONLY (target->source succeeds, source->target fails)
+        uplink_only_res = evaluate_point_to_point_link(
+            profile,
+            radio=t1000e_radio,
+            target_radio=g2_radio,
+            target_noise_penalty_db=6.0,
+            client_env_loss_db=30.0,
+        )
+        assert uplink_only_res.ok and uplink_only_res.value is not None
+        assert uplink_only_res.value.reachability_state == ReachabilityState.UPLINK_ONLY
+
+        # Extreme attenuation drives both directions negative -> UNREACHABLE
+        unreach_res = evaluate_point_to_point_link(
+            profile,
+            radio=g2_radio,
+            target_radio=t1000e_radio,
+            source_noise_penalty_db=6.0,
+            client_env_loss_db=60.0,
+        )
+        assert unreach_res.ok and unreach_res.value is not None
+        assert unreach_res.value.reachability_state == ReachabilityState.UNREACHABLE
+

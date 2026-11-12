@@ -21,15 +21,21 @@ from meshscout.core.contracts import (
     ElevationProfile,
     RadioConfig,
     SiteCandidate,
+    SiteRadioProfile,
     SiteType,
 )
 from meshscout.core.itm import evaluate_point_to_point_link
 from meshscout.core.presets import (
+    CLIENT_ENVIRONMENT_PROFILES,
+    ClientEnvironmentProfile,
     HARDWARE_PRESETS,
     PROTOCOL_PROFILES,
     SEASONAL_PROFILES,
+    SITE_NOISE_PENALTIES_DB,
     build_radio_config,
+    get_site_noise_penalty_db,
     list_all_presets,
+    resolve_site_radio_profile,
 )
 
 
@@ -352,3 +358,78 @@ def test_privacy_geocoder_vermont_municipal_alias_retry(tmp_path: Path) -> None:
         assert res.value.raw_coordinate.lat == pytest.approx(44.50239)
         assert res.value.raw_coordinate.lon == pytest.approx(-73.05925)
         assert mock_exec.call_count == 2
+
+
+def test_client_environment_profiles_catalog() -> None:
+    """Verify CLIENT_ENVIRONMENT_PROFILES matches required clutter losses and AGL heights."""
+    expected = {
+        "OUTDOOR_CLEAR": (0.0, 1.5),
+        "BODY_WORN_POCKET": (4.0, 1.2),
+        "VEHICLE_CABIN": (6.0, 1.5),
+        "INDOOR_WINDOW": (8.0, 2.0),
+        "ROOFTOP_MAST": (0.0, 6.0),
+    }
+    assert set(CLIENT_ENVIRONMENT_PROFILES.keys()) == set(expected.keys())
+    for env_id, (loss_db, agl_m) in expected.items():
+        prof = CLIENT_ENVIRONMENT_PROFILES[env_id]
+        assert isinstance(prof, ClientEnvironmentProfile)
+        assert prof.env_id == env_id
+        assert prof.clutter_loss_db == pytest.approx(loss_db)
+        assert prof.default_agl_m == pytest.approx(agl_m)
+        assert len(prof.label) > 0
+        assert len(prof.description) > 0
+
+    dumped = list_all_presets()
+    assert set(dumped["client_environment_profiles"].keys()) == set(expected.keys())
+
+
+def test_site_noise_penalties_and_resolve_site_radio_profile() -> None:
+    """Verify every SiteType maps to an RF noise penalty and resolve_site_radio_profile builds SiteRadioProfile."""
+    assert set(SITE_NOISE_PENALTIES_DB.keys()) == set(SiteType)
+    assert get_site_noise_penalty_db(SiteType.COMMUNICATIONS_TOWER) == pytest.approx(6.0)
+    assert get_site_noise_penalty_db(SiteType.MOUNTAIN_PEAK) == pytest.approx(3.0)
+    for civic_type in (
+        SiteType.WATER_TOWER,
+        SiteType.SILO,
+        SiteType.FIRE_LOOKOUT,
+        SiteType.BUILDING_ROOFTOP,
+        SiteType.RESEARCH_TOWER,
+        SiteType.CUSTOM,
+    ):
+        assert get_site_noise_penalty_db(civic_type) == pytest.approx(1.0)
+
+    comm_res = resolve_site_radio_profile(
+        site_type=SiteType.COMMUNICATIONS_TOWER,
+        hardware_id="STATION_G2_BACKBONE",
+        protocol_id="MESHTASTIC_LONGFAST",
+        season_id="SUMMER_FOLIAGE",
+    )
+    assert comm_res.ok is True and comm_res.value is not None
+    assert isinstance(comm_res.value, SiteRadioProfile)
+    assert comm_res.value.noise_penalty_db == pytest.approx(6.0)
+    assert comm_res.value.hardware_preset == "STATION_G2_BACKBONE"
+    assert comm_res.value.radio.tx_power_dbm == pytest.approx(28.0)
+    assert comm_res.value.radio.environmental_clutter_db == pytest.approx(8.5)
+
+    override_res = resolve_site_radio_profile(
+        site_type=SiteType.COMMUNICATIONS_TOWER,
+        noise_override_db=2.5,
+    )
+    assert override_res.ok is True and override_res.value is not None
+    assert override_res.value.noise_penalty_db == pytest.approx(2.5)
+    assert override_res.value.hardware_preset == "RAK4631_SOLAR"
+
+    neg_res = resolve_site_radio_profile(
+        site_type=SiteType.MOUNTAIN_PEAK,
+        noise_override_db=-1.0,
+    )
+    assert neg_res.ok is False and neg_res.error is not None
+    assert neg_res.error.code == "INVALID_NOISE_OVERRIDE"
+
+    bad_hw = resolve_site_radio_profile(
+        site_type=SiteType.SILO,
+        hardware_id="DOES_NOT_EXIST",
+    )
+    assert bad_hw.ok is False and bad_hw.error is not None
+    assert bad_hw.error.code == "UNKNOWN_HARDWARE_PRESET"
+

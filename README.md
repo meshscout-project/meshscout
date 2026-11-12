@@ -95,6 +95,28 @@ pytest tests -v
 meshscout mcp --stdio
 ```
 
+### Dual-Mode Link Budgets and Client Uplink Reachability
+
+MeshScout separates symmetric infrastructure links from asymmetric client reachability through two evaluation modes.
+
+- **Backhaul Mode (`--mode backhaul`)**: Models repeater-to-repeater links and enforces zero client clutter loss (`0.0` dB).
+- **Client Mode (`--mode client`)**: Applies body, vehicle, or indoor clutter penalties from `CLIENT_ENVIRONMENT_PROFILES` to client radios.
+- **Alligator-Zone Detection**: Compares downlink and uplink margins to flag `hear_only_alligator` links where towers out-talk pocket trackers.
+- **Client Reach (`meshscout reach`)**: Ranks local repeaters by `two_way` reachability ahead of `hear_only_alligator` candidates across 360-degree azimuths.
+
+Multi-hop corridor evaluation scores per-site hardware presets in both directions and tracks the worst bidirectional hop margin. Client-origin mesh routing enforces two-way closure on every leg and rejects alligator relays that cannot hear handheld uplinks. Directional composite viewsheds model `downlink`, `uplink`, and `two_way` footprints alongside asymmetric inter-site backhaul links.
+
+```powershell
+# Evaluate asymmetric repeater-to-handheld client link budget
+meshscout link --source 44.5437,-72.8143,1339.0 --target 44.4900,-73.1100,105.0 --mode client --client-env INDOOR_WINDOW
+
+# Evaluate infrastructure-to-infrastructure backhaul link budget (enforces 0.0 dB client clutter)
+meshscout link --source 44.5437,-72.8143,1339.0 --target 44.3154,-72.8868,1244.0 --mode backhaul
+
+# Rank two-way vs alligator-zone repeaters from a client coordinate
+meshscout reach --lat 44.4900 --lon -73.1100 --client-preset SENSECAP_T1000E --client-env BODY_WORN_POCKET --json
+```
+
 ### Model Context Protocol (MCP) Interface
 
 MeshScout provides a Day-0 compliant JSON-RPC 2.0 MCP server exposing:

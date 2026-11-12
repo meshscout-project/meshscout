@@ -9,7 +9,7 @@ knife-edge diffraction loss, and link margin coverage fractions without any I/O.
 from __future__ import annotations
 
 import math
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from pydantic import BaseModel, Field
 
 from meshscout.core.contracts import (
@@ -26,6 +26,7 @@ from meshscout.core.contracts import (
 EARTH_RADIUS_KM: float = 6371.0
 EFFECTIVE_EARTH_RADIUS_M: float = 6371000.0 * (4.0 / 3.0)  # k = 4/3 atmospheric refraction
 SPEED_OF_LIGHT_M_S: float = 299792458.0
+VALID_DIRECTIONS: Tuple[str, str, str] = ("downlink", "uplink", "two_way")
 
 
 class TargetGridPoint(BaseModel):
@@ -50,6 +51,8 @@ class TargetCoveragePoint(BaseModel):
     estimated_rx_dbm: float
     link_margin_db: float
     is_covered: bool
+    downlink_margin_db: Optional[float] = None
+    uplink_margin_db: Optional[float] = None
 
 
 class ViewshedResult(BaseModel):
@@ -63,6 +66,7 @@ class ViewshedResult(BaseModel):
     target_results: List[TargetCoveragePoint] = Field(default_factory=list)
     covered_target_ids: List[str] = Field(default_factory=list)
     shadowed_target_ids: List[str] = Field(default_factory=list)
+    direction: str = Field(default="downlink")
 
 
 def haversine_distance_km(c1: Coordinate, c2: Coordinate) -> float:
@@ -196,6 +200,46 @@ def _free_space_path_loss_db(distance_km: float, frequency_mhz: float) -> float:
     return 32.44 + 20.0 * math.log10(distance_km) + 20.0 * math.log10(frequency_mhz)
 
 
+def _compute_directional_link_metrics(
+    active_radio: RadioConfig,
+    fspl_db: float,
+    diff_loss_db: float,
+    client_radio: Optional[RadioConfig] = None,
+    client_env_loss_db: float = 0.0,
+    site_noise_penalty_db: float = 0.0,
+    direction: str = "downlink",
+) -> Tuple[float, float, float, float]:
+    """Compute directional (rx_power_dbm, margin_db, down_margin_db, up_margin_db)."""
+    c_radio = client_radio if client_radio is not None else active_radio
+    passive_gain_db = (
+        active_radio.antenna_gain_dbi
+        + c_radio.antenna_gain_dbi
+        - active_radio.cable_loss_db
+        - c_radio.cable_loss_db
+    )
+    clutter_db = (
+        max(active_radio.environmental_clutter_db, c_radio.environmental_clutter_db)
+        + client_env_loss_db
+    )
+    path_loss_db = fspl_db + diff_loss_db + clutter_db
+
+    down_rx = active_radio.tx_power_dbm + passive_gain_db - path_loss_db
+    down_margin = down_rx - c_radio.rx_sensitivity_dbm
+
+    up_rx = c_radio.tx_power_dbm + passive_gain_db - path_loss_db
+    up_margin = up_rx - (active_radio.rx_sensitivity_dbm + site_noise_penalty_db)
+
+    if direction == "downlink":
+        return down_rx, down_margin, down_margin, up_margin
+    if direction == "uplink":
+        return up_rx, up_margin, down_margin, up_margin
+    if direction == "two_way":
+        return min(down_rx, up_rx), min(down_margin, up_margin), down_margin, up_margin
+    raise ValueError(
+        f"Invalid direction '{direction}'. Expected one of {VALID_DIRECTIONS}."
+    )
+
+
 def evaluate_target_coverage(
     repeater: SiteCandidate,
     target: TargetGridPoint,
@@ -205,8 +249,25 @@ def evaluate_target_coverage(
     num_samples: int = 25,
     min_margin_db: float = 6.0,
     require_los: bool = False,
+    client_radio: Optional[RadioConfig] = None,
+    client_rx_height_m: Optional[float] = None,
+    client_env_loss_db: float = 0.0,
+    site_noise_penalty_db: float = 0.0,
+    direction: str = "downlink",
 ) -> TargetCoveragePoint:
     """Evaluate point-to-point terrain viewshed and RF link margin from repeater to target."""
+    if direction not in VALID_DIRECTIONS:
+        raise ValueError(
+            f"Invalid direction '{direction}'. Expected one of {VALID_DIRECTIONS}."
+        )
+
+    is_symmetric_default = (
+        client_radio is None
+        and client_env_loss_db == 0.0
+        and site_noise_penalty_db == 0.0
+        and direction == "downlink"
+    )
+
     if profile is not None and len(profile.points) >= 2:
         points = profile.points
         distance_km = (
@@ -226,13 +287,31 @@ def evaluate_target_coverage(
     total_dist_m = distance_km * 1000.0
     wavelength_m = SPEED_OF_LIGHT_M_S / (radio.frequency_mhz * 1e6)
 
+    effective_rx_height_m = (
+        client_rx_height_m if client_rx_height_m is not None else target.rx_height_m
+    )
     tx_alt_m = repeater.location.elevation_m + repeater.mast_height_m
-    rx_alt_m = target.coordinate.elevation_m + target.rx_height_m
+    rx_alt_m = target.coordinate.elevation_m + effective_rx_height_m
 
     # Co-located or very close target point
     if total_dist_m <= 1.0 or len(points) < 2:
-        rx_power_dbm = radio.tx_power_dbm + 2.0 * radio.antenna_gain_dbi - 2.0 * radio.cable_loss_db
-        link_margin_db = rx_power_dbm - radio.rx_sensitivity_dbm
+        if is_symmetric_default:
+            rx_power_dbm = radio.tx_power_dbm + 2.0 * radio.antenna_gain_dbi - 2.0 * radio.cable_loss_db
+            link_margin_db = rx_power_dbm - radio.rx_sensitivity_dbm
+            down_margin_out: Optional[float] = None
+            up_margin_out: Optional[float] = None
+        else:
+            rx_power_dbm, link_margin_db, down_m, up_m = _compute_directional_link_metrics(
+                active_radio=radio,
+                fspl_db=0.0,
+                diff_loss_db=0.0,
+                client_radio=client_radio,
+                client_env_loss_db=client_env_loss_db,
+                site_noise_penalty_db=site_noise_penalty_db,
+                direction=direction,
+            )
+            down_margin_out = round(down_m, 2) if client_radio is not None else None
+            up_margin_out = round(up_m, 2) if client_radio is not None else None
         is_covered = link_margin_db >= min_margin_db
         return TargetCoveragePoint(
             target_id=target.target_id,
@@ -243,6 +322,8 @@ def evaluate_target_coverage(
             estimated_rx_dbm=round(rx_power_dbm, 2),
             link_margin_db=round(link_margin_db, 2),
             is_covered=is_covered,
+            downlink_margin_db=down_margin_out,
+            uplink_margin_db=up_margin_out,
         )
 
     min_fresnel_ratio = float("inf")
@@ -286,15 +367,30 @@ def evaluate_target_coverage(
 
     fspl_db = _free_space_path_loss_db(distance_km, radio.frequency_mhz)
     diffraction_db = _knife_edge_diffraction_db(max_nu)
-    total_loss_db = fspl_db + diffraction_db + radio.environmental_clutter_db
 
-    rx_power_dbm = (
-        radio.tx_power_dbm
-        + 2.0 * radio.antenna_gain_dbi
-        - 2.0 * radio.cable_loss_db
-        - total_loss_db
-    )
-    link_margin_db = rx_power_dbm - radio.rx_sensitivity_dbm
+    if is_symmetric_default:
+        total_loss_db = fspl_db + diffraction_db + radio.environmental_clutter_db
+        rx_power_dbm = (
+            radio.tx_power_dbm
+            + 2.0 * radio.antenna_gain_dbi
+            - 2.0 * radio.cable_loss_db
+            - total_loss_db
+        )
+        link_margin_db = rx_power_dbm - radio.rx_sensitivity_dbm
+        down_margin_out = None
+        up_margin_out = None
+    else:
+        rx_power_dbm, link_margin_db, down_m, up_m = _compute_directional_link_metrics(
+            active_radio=radio,
+            fspl_db=fspl_db,
+            diff_loss_db=diffraction_db,
+            client_radio=client_radio,
+            client_env_loss_db=client_env_loss_db,
+            site_noise_penalty_db=site_noise_penalty_db,
+            direction=direction,
+        )
+        down_margin_out = round(down_m, 2) if client_radio is not None else None
+        up_margin_out = round(up_m, 2) if client_radio is not None else None
 
     if require_los:
         is_covered = has_los and (link_margin_db >= min_margin_db)
@@ -310,6 +406,8 @@ def evaluate_target_coverage(
         estimated_rx_dbm=round(rx_power_dbm, 2),
         link_margin_db=round(link_margin_db, 2),
         is_covered=is_covered,
+        downlink_margin_db=down_margin_out,
+        uplink_margin_db=up_margin_out,
     )
 
 
@@ -322,6 +420,11 @@ def compute_viewshed(
     min_margin_db: float = 6.0,
     require_los: bool = False,
     num_samples: int = 25,
+    client_radio: Optional[RadioConfig] = None,
+    client_rx_height_m: Optional[float] = None,
+    client_env_loss_db: float = 0.0,
+    site_noise_penalty_db: float = 0.0,
+    direction: str = "downlink",
 ) -> Result[ViewshedResult]:
     """Compute a Point-to-Multipoint viewshed coverage report from a repeater across target points.
 
@@ -334,10 +437,21 @@ def compute_viewshed(
         min_margin_db: Minimum required link margin in dB to classify a point as covered.
         require_los: If True, requires unobstructed optical/radio LOS in addition to link margin.
         num_samples: Number of intermediate transect samples when sampling via `elevation_fn`.
+        client_radio: Optional client RadioConfig for asymmetric link budgets.
+        client_rx_height_m: Optional receiver antenna height override in meters.
+        client_env_loss_db: Additional client environment clutter/vehicle loss in dB.
+        site_noise_penalty_db: Repeater site RF noise floor degradation in dB on uplink.
+        direction: Evaluation direction ("downlink", "uplink", or "two_way").
 
     Returns:
         Result[ViewshedResult] with individual target metrics and coverage fractions.
     """
+    if direction not in VALID_DIRECTIONS:
+        return Result.fail(
+            code="INVALID_DIRECTION",
+            message=f"Invalid viewshed direction '{direction}'. Must be one of {VALID_DIRECTIONS}.",
+        )
+
     if not targets:
         return Result.fail(
             code="EMPTY_TARGET_GRID",
@@ -370,6 +484,11 @@ def compute_viewshed(
             num_samples=num_samples,
             min_margin_db=min_margin_db,
             require_los=require_los,
+            client_radio=client_radio,
+            client_rx_height_m=client_rx_height_m,
+            client_env_loss_db=client_env_loss_db,
+            site_noise_penalty_db=site_noise_penalty_db,
+            direction=direction,
         )
         target_results.append(cov)
         total_weight += target.population_weight
@@ -395,6 +514,7 @@ def compute_viewshed(
             target_results=target_results,
             covered_target_ids=covered_ids,
             shadowed_target_ids=shadowed_ids,
+            direction=direction,
         )
     )
 
@@ -416,6 +536,12 @@ class RadialViewshedPolygonResult(BaseModel):
     )
     los_area_sq_km: float = Field(default=0.0)
     diffracted_area_sq_km: float = Field(default=0.0)
+    direction: str = Field(default="downlink")
+
+    @property
+    def marginal_area_sq_km(self) -> float:
+        """Alias for diffracted_area_sq_km representing outer marginal perimeter area."""
+        return self.diffracted_area_sq_km
 
 
 def compute_radial_viewshed_polygon(
@@ -426,6 +552,11 @@ def compute_radial_viewshed_polygon(
     elevation_fn: Optional[Callable[[float, float], float]] = None,
     min_margin_db: float = 0.0,
     distance_steps: int = 30,
+    client_radio: Optional[RadioConfig] = None,
+    client_rx_height_m: Optional[float] = None,
+    client_env_loss_db: float = 0.0,
+    site_noise_penalty_db: float = 0.0,
+    direction: str = "downlink",
 ) -> Result[RadialViewshedPolygonResult]:
     """Compute a 360-degree elevation-occluded coverage polygon using radial horizon ray-casting.
 
@@ -434,16 +565,30 @@ def compute_radial_viewshed_polygon(
     Identifies the exact distance where line-of-sight is severed and where diffracted
     link margin drops below min_margin_db, returning closed boundary polygons.
     """
+    if direction not in VALID_DIRECTIONS:
+        return Result.fail(
+            code="INVALID_DIRECTION",
+            message=f"Invalid viewshed direction '{direction}'. Must be one of {VALID_DIRECTIONS}.",
+        )
+
     if num_radials < 8:
         num_radials = 8
+
+    is_symmetric_default = (
+        client_radio is None
+        and client_env_loss_db == 0.0
+        and site_noise_penalty_db == 0.0
+        and direction == "downlink"
+    )
 
     active_radio = radio if radio is not None else RadioConfig()
     coord = origin.location
     tx_alt_m = max(1.0, coord.elevation_m + origin.mast_height_m)
+    rx_height_m = max(0.0, client_rx_height_m) if client_rx_height_m is not None else 2.0
 
-    # Radio horizon calculation for TX + standard 2m RX
+    # Radio horizon calculation for TX + client RX height (default 2.0m)
     d_tx_horiz_km = math.sqrt(2.0 * EFFECTIVE_EARTH_RADIUS_M * tx_alt_m) / 1000.0
-    d_rx_horiz_km = math.sqrt(2.0 * EFFECTIVE_EARTH_RADIUS_M * 2.0) / 1000.0
+    d_rx_horiz_km = math.sqrt(2.0 * EFFECTIVE_EARTH_RADIUS_M * rx_height_m) / 1000.0
     radio_horiz_km = round(d_tx_horiz_km + d_rx_horiz_km, 2)
     effective_max_km = min(max_range_km, max(12.0, radio_horiz_km))
 
@@ -485,7 +630,7 @@ def compute_radial_viewshed_polygon(
             earth_drop_m = (d_m ** 2) / (2.0 * EFFECTIVE_EARTH_RADIUS_M)
             terrain_angle = (terr_elev_m - tx_alt_m - earth_drop_m) / d_m
 
-            rx_alt_m = terr_elev_m + 2.0
+            rx_alt_m = terr_elev_m + rx_height_m
             rx_elev_angle = (rx_alt_m - tx_alt_m - earth_drop_m) / d_m
 
             # Check if this point is in the geometric shadow of an intermediate peak
@@ -501,27 +646,49 @@ def compute_radial_viewshed_polygon(
                 nu = obs_drop_m * math.sqrt((2.0 * d_m) / (wavelength_m * d1_m * d2_m))
                 diff_loss_db = _knife_edge_diffraction_db(nu)
                 fspl_db = _free_space_path_loss_db(dist_km, active_radio.frequency_mhz)
-                total_loss_db = fspl_db + diff_loss_db + active_radio.environmental_clutter_db
-                rx_power_dbm = (
-                    active_radio.tx_power_dbm
-                    + 2.0 * active_radio.antenna_gain_dbi
-                    - 2.0 * active_radio.cable_loss_db
-                    - total_loss_db
-                )
-                margin_db = rx_power_dbm - active_radio.rx_sensitivity_dbm
+                if is_symmetric_default:
+                    total_loss_db = fspl_db + diff_loss_db + active_radio.environmental_clutter_db
+                    rx_power_dbm = (
+                        active_radio.tx_power_dbm
+                        + 2.0 * active_radio.antenna_gain_dbi
+                        - 2.0 * active_radio.cable_loss_db
+                        - total_loss_db
+                    )
+                    margin_db = rx_power_dbm - active_radio.rx_sensitivity_dbm
+                else:
+                    _, margin_db, _, _ = _compute_directional_link_metrics(
+                        active_radio=active_radio,
+                        fspl_db=fspl_db,
+                        diff_loss_db=diff_loss_db,
+                        client_radio=client_radio,
+                        client_env_loss_db=client_env_loss_db,
+                        site_noise_penalty_db=site_noise_penalty_db,
+                        direction=direction,
+                    )
                 if margin_db < min_margin_db and diff_cutoff_km == effective_max_km:
                     diff_cutoff_km = dist_km
             else:
                 # Test FSPL cutoff even if unblocked
                 fspl_db = _free_space_path_loss_db(dist_km, active_radio.frequency_mhz)
-                margin_db = (
-                    active_radio.tx_power_dbm
-                    + 2.0 * active_radio.antenna_gain_dbi
-                    - 2.0 * active_radio.cable_loss_db
-                    - fspl_db
-                    - active_radio.environmental_clutter_db
-                    - active_radio.rx_sensitivity_dbm
-                )
+                if is_symmetric_default:
+                    margin_db = (
+                        active_radio.tx_power_dbm
+                        + 2.0 * active_radio.antenna_gain_dbi
+                        - 2.0 * active_radio.cable_loss_db
+                        - fspl_db
+                        - active_radio.environmental_clutter_db
+                        - active_radio.rx_sensitivity_dbm
+                    )
+                else:
+                    _, margin_db, _, _ = _compute_directional_link_metrics(
+                        active_radio=active_radio,
+                        fspl_db=fspl_db,
+                        diff_loss_db=0.0,
+                        client_radio=client_radio,
+                        client_env_loss_db=client_env_loss_db,
+                        site_noise_penalty_db=site_noise_penalty_db,
+                        direction=direction,
+                    )
                 if margin_db < min_margin_db:
                     if los_cutoff_km == effective_max_km:
                         los_cutoff_km = dist_km
@@ -560,5 +727,6 @@ def compute_radial_viewshed_polygon(
             diffracted_polygon=diff_poly,
             los_area_sq_km=round(los_area_sum, 1),
             diffracted_area_sq_km=round(diff_area_sum, 1),
+            direction=direction,
         )
     )

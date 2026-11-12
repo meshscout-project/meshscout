@@ -11,13 +11,18 @@ import argparse
 import json
 from pathlib import Path
 import sys
-from typing import Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
+from meshscout.core.contracts import Coordinate
+from meshscout.core.presets import CLIENT_ENVIRONMENT_PROFILES, build_radio_config
+from meshscout.core.registry import LivingMeshRegistry, evaluate_home_node_reach
 from meshscout.mcp_server import (
     MeshScoutMCPServer,
+    _synthetic_vermont_elevation_fn,
     create_fastmcp_app,
     evaluate_link_budget,
     inspect_site_feasibility,
+    load_regional_fixtures,
     scout_repeater_sites,
 )
 
@@ -231,11 +236,119 @@ def build_parser() -> argparse.ArgumentParser:
         help="Transmit power in dBm (default: 20.0)",
     )
     p_link.add_argument(
+        "--mode",
+        choices=["client", "backhaul"],
+        default=None,
+        help="Dual-mode evaluation ('client' applies client clutter; 'backhaul' enforces 0.0 dB clutter)",
+    )
+    p_link.add_argument(
+        "--source-preset",
+        default=None,
+        help="Hardware preset ID for source transceiver (default: STATION_G2_BACKBONE in dual-mode)",
+    )
+    p_link.add_argument(
+        "--target-preset",
+        default=None,
+        help="Hardware preset ID for target transceiver (default: SENSECAP_T1000E in client mode, RAK4631_SOLAR in backhaul mode)",
+    )
+    p_link.add_argument(
+        "--client-env",
+        type=str.upper,
+        choices=list(CLIENT_ENVIRONMENT_PROFILES.keys()),
+        default=None,
+        help="Client operating environment clutter profile (ignored with 0.0 dB clutter in backhaul mode)",
+    )
+    p_link.add_argument(
+        "--protocol",
+        default="MESHTASTIC_LONGFAST",
+        help="Protocol modulation profile ID (default: MESHTASTIC_LONGFAST)",
+    )
+    p_link.add_argument(
+        "--season",
+        default="SUMMER_FOLIAGE",
+        help="Seasonal foliage attenuation profile ID (default: SUMMER_FOLIAGE)",
+    )
+    p_link.add_argument(
+        "--source-noise-db",
+        type=float,
+        default=0.0,
+        help="Local RF noise floor degradation penalty at source site in dB (default: 0.0)",
+    )
+    p_link.add_argument(
+        "--target-noise-db",
+        type=float,
+        default=0.0,
+        help="Local RF noise floor degradation penalty at target site in dB (default: 0.0)",
+    )
+    p_link.add_argument(
         "--no-delay",
         action="store_true",
         help="Run in instant offline mode without egress delay",
     )
     p_link.add_argument(
+        "--json",
+        action="store_true",
+        dest="output_json",
+        help="Emit structured JSON output",
+    )
+
+    # 2b. reach subcommand
+    p_reach = subparsers.add_parser(
+        "reach",
+        help="Evaluate 360-degree client uplink and downlink reachability to regional towers.",
+    )
+    p_reach.add_argument(
+        "--lat",
+        type=float,
+        default=None,
+        help="Client or home node latitude in decimal degrees",
+    )
+    p_reach.add_argument(
+        "--lon",
+        type=float,
+        default=None,
+        help="Client or home node longitude in decimal degrees",
+    )
+    p_reach.add_argument(
+        "--elev-m",
+        type=float,
+        default=None,
+        help="Optional ground elevation in meters above sea level",
+    )
+    p_reach.add_argument(
+        "--agl-m",
+        type=float,
+        default=None,
+        help="Optional antenna height above ground in meters",
+    )
+    p_reach.add_argument(
+        "--client-preset",
+        default="SENSECAP_T1000E",
+        help="Client hardware preset ID (default: SENSECAP_T1000E)",
+    )
+    p_reach.add_argument(
+        "--client-env",
+        type=str.upper,
+        choices=list(CLIENT_ENVIRONMENT_PROFILES.keys()),
+        default="OUTDOOR_CLEAR",
+        help="Client operating environment clutter profile (default: OUTDOOR_CLEAR)",
+    )
+    p_reach.add_argument(
+        "--protocol",
+        default="MESHTASTIC_LONGFAST",
+        help="Protocol modulation profile ID (default: MESHTASTIC_LONGFAST)",
+    )
+    p_reach.add_argument(
+        "--season",
+        default="SUMMER_FOLIAGE",
+        help="Seasonal foliage attenuation profile ID (default: SUMMER_FOLIAGE)",
+    )
+    p_reach.add_argument(
+        "--db-path",
+        default=None,
+        help="Optional path to SQLite mesh_state.db",
+    )
+    p_reach.add_argument(
         "--json",
         action="store_true",
         dest="output_json",
@@ -791,6 +904,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             target_elev_m=t_elev,
             frequency_mhz=args.freq,
             tx_power_dbm=args.tx_power,
+            evaluation_mode=args.mode,
+            source_preset=args.source_preset,
+            target_preset=args.target_preset,
+            client_env=args.client_env,
+            protocol_profile=args.protocol,
+            season_profile=args.season,
+            source_noise_penalty_db=args.source_noise_db,
+            target_noise_penalty_db=args.target_noise_db,
         )
         if not res.get("ok"):
             sys.stderr.write(f"Error: {res.get('error', {}).get('message', 'Link budget failed')}\n")
@@ -807,6 +928,107 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"FSPL: {lb['free_space_loss_db']:.2f} dB | Diffraction Loss: {lb['diffraction_loss_db']:.2f} dB | "
                 f"RX Power: {lb['rx_power_dbm']:.2f} dBm | Link Margin: {lb['link_margin_db']:.2f} dB\n"
             )
+            if lb.get("reachability_state") is not None:
+                sys.stdout.write(
+                    f"Mode: {res.get('evaluation_mode', 'client')} | "
+                    f"Reachability: {lb['reachability_state']} | "
+                    f"Downlink Margin: {lb['downlink_margin_db']:.2f} dB | "
+                    f"Uplink Margin: {lb['uplink_margin_db']:.2f} dB | "
+                    f"Asymmetry Delta: {lb['asymmetry_delta_db']:.2f} dB\n"
+                )
+        return 0
+
+    if args.command == "reach":
+        registry = LivingMeshRegistry(db_path=args.db_path)
+        prefs = registry.get_preferences()
+
+        lat = float(args.lat) if args.lat is not None else prefs.home_lat
+        lon = float(args.lon) if args.lon is not None else prefs.home_lon
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            sys.stderr.write(f"Error: Invalid latitude ({lat}) or longitude ({lon}).\n")
+            return 1
+
+        if args.elev_m is not None:
+            elev_m = float(args.elev_m)
+        elif args.lat is not None or args.lon is not None:
+            elev_m = _synthetic_vermont_elevation_fn(lat, lon)
+        else:
+            elev_m = prefs.home_elev_m
+
+        env_key = args.client_env.strip().upper()
+        env_prof = CLIENT_ENVIRONMENT_PROFILES[env_key]
+        agl_m = float(args.agl_m) if args.agl_m is not None else env_prof.default_agl_m
+
+        eff_preset = args.client_preset.strip().upper()
+        eff_protocol = args.protocol.strip().upper()
+        eff_season = args.season.strip().upper()
+
+        radio_res = build_radio_config(
+            hardware_id=eff_preset,
+            protocol_id=eff_protocol,
+            season_id=eff_season,
+        )
+        if not radio_res.ok or radio_res.value is None:
+            msg = radio_res.error.message if radio_res.error else "Invalid client radio preset"
+            sys.stderr.write(f"Error: {msg}\n")
+            return 1
+
+        nodes = registry.list_nodes()
+        if not nodes:
+            _, candidates = load_regional_fixtures(region="vt_chittenden")
+            registry.seed_candidates(candidates)
+            nodes = registry.list_nodes()
+
+        reach_res = evaluate_home_node_reach(
+            home_coord=Coordinate(lat=lat, lon=lon, elevation_m=elev_m),
+            home_height_agl_m=agl_m,
+            nodes=nodes,
+            client_radio=radio_res.value,
+            client_env_loss_db=env_prof.clutter_loss_db,
+            protocol_id=eff_protocol,
+            season_id=eff_season,
+            elevation_fn=_synthetic_vermont_elevation_fn,
+        )
+        if not reach_res.ok or reach_res.value is None:
+            msg = reach_res.error.message if reach_res.error else "Reach evaluation failed"
+            sys.stderr.write(f"Error: {msg}\n")
+            return 1
+
+        report_dict = reach_res.value.model_dump(mode="json")
+        ranked = report_dict["ranked_towers"]
+        two_way_count = sum(1 for t in ranked if t.get("reachability_state") == "two_way")
+        alligator_count = sum(
+            1 for t in ranked if t.get("reachability_state") == "hear_only_alligator"
+        )
+        payload = {
+            "ok": True,
+            "client_preset": eff_preset,
+            "client_env": env_key,
+            "client_env_loss_db": env_prof.clutter_loss_db,
+            "protocol_profile": eff_protocol,
+            "season_profile": eff_season,
+            "two_way_count": two_way_count,
+            "hear_only_alligator_count": alligator_count,
+            **report_dict,
+            "report": report_dict,
+        }
+
+        if args.output_json:
+            sys.stdout.write(json.dumps(payload, indent=2) + "\n")
+        else:
+            sys.stdout.write(
+                f"Client Reach: ({lat:.4f}, {lon:.4f}, {elev_m:.1f}m + {agl_m:.1f}m AGL) | "
+                f"Preset: {eff_preset} | Env: {env_key} ({env_prof.clutter_loss_db:.1f} dB)\n"
+                f"Two-Way Towers: {two_way_count} | Hear-Only Alligator Towers: {alligator_count} | "
+                f"Best Azimuth: {report_dict['best_azimuth_deg']} ({report_dict['best_cardinal_direction']})\n"
+            )
+            for item in ranked:
+                sys.stdout.write(
+                    f"  [{item['recommended_rank']}] [{item['reachability_state']}] "
+                    f"{item['site_id']} ({item['name']}) - Dist: {item['distance_km']:.2f} km, "
+                    f"Az: {item['azimuth_deg']:.1f} ({item['cardinal_direction']}), "
+                    f"DL: {item['downlink_margin_db']:.2f} dB, UL: {item['uplink_margin_db']:.2f} dB\n"
+                )
         return 0
 
     if args.command == "feasibility":

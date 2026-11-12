@@ -164,3 +164,106 @@ def test_corridor_mixed_registry_and_custom_sites(client: TestClient) -> None:
     assert corridor["total_hops"] == 1
     assert corridor["hops"][0]["origin_site_id"] == "VT-CHIT-MANS-01"
     assert corridor["hops"][0]["target_site_id"] == "CUSTOM-RELAY-1"
+    assert corridor["hops"][0]["forward_margin_db"] is None
+    assert corridor["hops"][0]["reverse_margin_db"] is None
+    assert corridor["hops"][0]["reachability_state"] is None
+
+
+def test_corridor_asymmetric_site_presets_and_bidirectional_worst_margin(
+    client: TestClient,
+) -> None:
+    """Verify POST /api/backhaul/corridor resolves site_presets + node fallback and tracks bidirectional worst_link_margin_db."""
+    # Configure registered node fallback on VT-PEAK-01 -> STATION_G2_BACKBONE
+    upd = client.post(
+        "/api/sites/status",
+        json={
+            "site_id": "VT-PEAK-01",
+            "status": "active_on_air",
+            "hardware_preset": "STATION_G2_BACKBONE",
+        },
+    )
+    assert upd.status_code == 200
+
+    comm_tower = {
+        "site_id": "CUSTOM-COMM-01",
+        "name": "Noisy Commercial Tower",
+        "location": {"lat": 44.4800, "lon": -73.2200, "elevation_m": 320.0},
+        "site_type": "communications_tower",
+        "mast_height_m": 25.0,
+    }
+    solar_relay = {
+        "site_id": "CUSTOM-SOLAR-01",
+        "name": "Quiet Foothill Fire Lookout",
+        "location": {"lat": 44.5000, "lon": -73.0200, "elevation_m": 520.0},
+        "site_type": "fire_lookout",
+        "mast_height_m": 10.0,
+    }
+
+    resp = client.post(
+        "/api/backhaul/corridor",
+        json={
+            "site_ids": ["CUSTOM-COMM-01", "CUSTOM-SOLAR-01", "VT-PEAK-01"],
+            "custom_sites": [comm_tower, solar_relay],
+            "site_presets": {
+                "CUSTOM-COMM-01": "STATION_G2_BACKBONE",
+                "CUSTOM-SOLAR-01": "RAK4631_SOLAR",
+                # VT-PEAK-01 omitted to exercise RegisteredNode.hardware_preset fallback
+            },
+            "protocol_profile": "MESHTASTIC_LONGFAST",
+            "season_profile": "SUMMER_LEAF_ON",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    corridor = data["corridor"]
+    assert corridor["total_hops"] == 2
+
+    hop0, hop1 = corridor["hops"][0], corridor["hops"][1]
+    for hop in (hop0, hop1):
+        assert hop["forward_margin_db"] is not None
+        assert hop["reverse_margin_db"] is not None
+        assert hop["reachability_state"] in (
+            "two_way",
+            "hear_only_alligator",
+            "uplink_only",
+            "unreachable",
+        )
+        assert hop["link_margin_db"] == pytest.approx(
+            min(hop["forward_margin_db"], hop["reverse_margin_db"]), abs=0.05
+        )
+
+    # Hop 0: 28 dBm comm tower (6 dB noise) -> 22 dBm fire lookout (1 dB noise) => +11.0 dB forward delta
+    assert hop0["forward_margin_db"] - hop0["reverse_margin_db"] == pytest.approx(11.0, abs=0.05)
+    assert hop0["link_margin_db"] == pytest.approx(hop0["reverse_margin_db"], abs=0.05)
+
+    # Hop 1: 22 dBm fire lookout (1 dB noise) -> 28 dBm mountain peak fallback (3 dB noise) => +8.0 dB reverse delta
+    assert hop1["reverse_margin_db"] - hop1["forward_margin_db"] == pytest.approx(8.0, abs=0.05)
+    assert hop1["link_margin_db"] == pytest.approx(hop1["forward_margin_db"], abs=0.05)
+
+    expected_worst = min(hop0["link_margin_db"], hop1["link_margin_db"])
+    assert corridor["worst_link_margin_db"] == pytest.approx(expected_worst, abs=0.05)
+    bn_idx = corridor["bottleneck_hop_index"]
+    assert bn_idx in (0, 1)
+    assert corridor["hops"][bn_idx]["link_margin_db"] == pytest.approx(expected_worst, abs=0.05)
+
+    # HTTP 400 validation on invalid site_presets or protocol_profile
+    bad_preset = client.post(
+        "/api/backhaul/corridor",
+        json={
+            "site_ids": ["VT-CHIT-MANS-01", "VT-CHIT-BOLT-01"],
+            "site_presets": {"VT-CHIT-MANS-01": "NOT_A_REAL_RADIO"},
+        },
+    )
+    assert bad_preset.status_code == 400
+
+    bad_proto = client.post(
+        "/api/backhaul/corridor",
+        json={
+            "site_ids": ["VT-CHIT-MANS-01", "VT-CHIT-BOLT-01"],
+            "asymmetric": True,
+            "protocol_profile": "BOGUS_PROTO",
+        },
+    )
+    assert bad_proto.status_code == 400
+

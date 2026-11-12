@@ -27,6 +27,14 @@ class AccessDifficulty(str, Enum):
     HELICOPTER = "helicopter"
 
 
+class ReachabilityState(str, Enum):
+    """Bidirectional RF link reachability classification."""
+    TWO_WAY = "two_way"
+    HEAR_ONLY_ALLIGATOR = "hear_only_alligator"
+    UPLINK_ONLY = "uplink_only"
+    UNREACHABLE = "unreachable"
+
+
 class Coordinate(BaseModel):
     """Geodetic coordinate in EPSG:4326 with elevation in meters."""
     lat: float = Field(..., ge=-90.0, le=90.0, description="Latitude in decimal degrees (-90 to 90)")
@@ -97,6 +105,13 @@ class RadioConfig(BaseModel):
     environmental_clutter_db: float = Field(default=0.0, ge=0.0, description="Environmental foliage and clutter loss in dB")
 
 
+class SiteRadioProfile(BaseModel):
+    """Resolved high-site transceiver configuration and RF noise floor penalty."""
+    radio: RadioConfig
+    noise_penalty_db: float = Field(default=0.0, ge=0.0, description="Local RF noise floor degradation in dB")
+    hardware_preset: Optional[str] = None
+
+
 class DowntiltAnalysisResult(BaseModel):
     """Antenna look-down angle and vertical beamwidth alignment metrics."""
     look_down_angle_deg: float = Field(..., description="Angle from local horizontal down to target receiver in degrees")
@@ -120,6 +135,12 @@ class LinkBudgetResult(BaseModel):
     has_line_of_sight: bool
     fresnel_clearance_ratio: float = Field(..., description="First Fresnel zone minimum clearance fraction")
     downtilt_analysis: Optional[DowntiltAnalysisResult] = None
+    downlink_rx_dbm: Optional[float] = None
+    downlink_margin_db: Optional[float] = None
+    uplink_rx_dbm: Optional[float] = None
+    uplink_margin_db: Optional[float] = None
+    asymmetry_delta_db: Optional[float] = None
+    reachability_state: Optional[ReachabilityState] = None
 
 
 class MeshScoutError(BaseModel):

@@ -6,10 +6,10 @@ bridging user-friendly presets to the core Longley-Rice ITM `RadioConfig` contra
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Optional
 from pydantic import BaseModel, Field
 
-from meshscout.core.contracts import RadioConfig, Result
+from meshscout.core.contracts import RadioConfig, Result, SiteRadioProfile, SiteType
 
 
 class HardwarePreset(BaseModel):
@@ -48,6 +48,16 @@ class SeasonalFoliageProfile(BaseModel):
     label: str = Field(..., min_length=1, description="Human-readable season label")
     canopy_loss_db: float = Field(..., ge=0.0, description="Total path foliage attenuation penalty in dB")
     description: str = Field(..., min_length=1, description="RF propagation impact of seasonal canopy state")
+
+
+class ClientEnvironmentProfile(BaseModel):
+    """Client endpoint clutter attenuation and typical operating height profile."""
+
+    env_id: str = Field(..., min_length=1, description="Unique client environment profile identifier")
+    label: str = Field(..., min_length=1, description="Human-readable operating environment label")
+    clutter_loss_db: float = Field(..., ge=0.0, description="Local client clutter/body/enclosure loss in dB")
+    default_agl_m: float = Field(..., ge=0.0, description="Default antenna height above ground in meters")
+    description: str = Field(..., min_length=1, description="RF propagation impact of client operating environment")
 
 
 HARDWARE_PRESETS: Dict[str, HardwarePreset] = {
@@ -167,18 +177,72 @@ SEASONAL_PROFILES: Dict[str, SeasonalFoliageProfile] = {
     ),
 }
 
+SEASON_ALIASES: Dict[str, str] = {
+    "SUMMER_FOLIAGE": "SUMMER_LEAF_ON",
+    "WINTER_DORMANT": "WINTER_LEAF_OFF",
+}
+
+CLIENT_ENVIRONMENT_PROFILES: Dict[str, ClientEnvironmentProfile] = {
+    "OUTDOOR_CLEAR": ClientEnvironmentProfile(
+        env_id="OUTDOOR_CLEAR",
+        label="Outdoor Clear Sightline",
+        clutter_loss_db=0.0,
+        default_agl_m=1.5,
+        description="Handheld or tripod-mounted client node in open outdoor terrain without body or cabin shielding.",
+    ),
+    "BODY_WORN_POCKET": ClientEnvironmentProfile(
+        env_id="BODY_WORN_POCKET",
+        label="Body-Worn / Pocket Tracker",
+        clutter_loss_db=4.0,
+        default_agl_m=1.2,
+        description="Pocket or pack-strap portable tracker subject to human-body dielectric absorption at 915 MHz.",
+    ),
+    "VEHICLE_CABIN": ClientEnvironmentProfile(
+        env_id="VEHICLE_CABIN",
+        label="Inside Vehicle Cabin",
+        clutter_loss_db=6.0,
+        default_agl_m=1.5,
+        description="Dashboard or console-mounted radio attenuated by automotive pillars and metallic window tint.",
+    ),
+    "INDOOR_WINDOW": ClientEnvironmentProfile(
+        env_id="INDOOR_WINDOW",
+        label="Indoor Window Sill",
+        clutter_loss_db=8.0,
+        default_agl_m=2.0,
+        description="Residential window-sill node attenuated by framing, insect screens, and low-E glazing.",
+    ),
+    "ROOFTOP_MAST": ClientEnvironmentProfile(
+        env_id="ROOFTOP_MAST",
+        label="Exterior Rooftop / Eave Mast",
+        clutter_loss_db=0.0,
+        default_agl_m=6.0,
+        description="Fixed outdoor rooftop or gable mast installation clear of near-field residential clutter.",
+    ),
+}
+
+SITE_NOISE_PENALTIES_DB: Dict[SiteType, float] = {
+    SiteType.COMMUNICATIONS_TOWER: 6.0,
+    SiteType.MOUNTAIN_PEAK: 3.0,
+    SiteType.WATER_TOWER: 1.0,
+    SiteType.SILO: 1.0,
+    SiteType.FIRE_LOOKOUT: 1.0,
+    SiteType.BUILDING_ROOFTOP: 1.0,
+    SiteType.RESEARCH_TOWER: 1.0,
+    SiteType.CUSTOM: 1.0,
+}
+
+
+def get_site_noise_penalty_db(site_type: SiteType) -> float:
+    """Return local RF noise floor degradation penalty in dB for a high-site category."""
+    return SITE_NOISE_PENALTIES_DB.get(site_type, 1.0)
+
 
 def build_radio_config(
     hardware_id: str = "RAK4631_SOLAR",
     protocol_id: str = "MESHTASTIC_LONGFAST",
     season_id: str = "WINTER_LEAF_OFF",
 ) -> Result[RadioConfig]:
-    """Build a unified `RadioConfig` from hardware, protocol, and seasonal presets.
-
-    Adds `canopy_loss_db / 2.0` to `cable_loss_db` because `evaluate_point_to_point_link`
-    applies `2.0 * cable_loss_db` to total system losses, ensuring the seasonal foliage
-    attenuation (`canopy_loss_db`) is reflected 1:1 in `LinkBudgetResult`.
-    """
+    """Build a unified `RadioConfig` from hardware, protocol, and seasonal presets."""
     hw_key = hardware_id.strip().upper()
     if hw_key not in HARDWARE_PRESETS:
         return Result.fail(
@@ -193,7 +257,8 @@ def build_radio_config(
             message=f"Unknown protocol profile '{protocol_id}'. Available: {sorted(PROTOCOL_PROFILES.keys())}",
         )
 
-    season_key = season_id.strip().upper()
+    raw_season_key = season_id.strip().upper()
+    season_key = SEASON_ALIASES.get(raw_season_key, raw_season_key)
     if season_key not in SEASONAL_PROFILES:
         return Result.fail(
             code="UNKNOWN_SEASONAL_PROFILE",
@@ -216,10 +281,57 @@ def build_radio_config(
     )
 
 
+def resolve_site_radio_profile(
+    site_type: SiteType,
+    hardware_id: str = "RAK4631_SOLAR",
+    protocol_id: str = "MESHTASTIC_LONGFAST",
+    season_id: str = "SUMMER_FOLIAGE",
+    noise_override_db: Optional[float] = None,
+) -> Result[SiteRadioProfile]:
+    """Resolve a high-site `SiteRadioProfile` combining radio presets and site RF noise penalty."""
+    if noise_override_db is not None and noise_override_db < 0.0:
+        return Result.fail(
+            code="INVALID_NOISE_OVERRIDE",
+            message=f"noise_override_db must be non-negative, got {noise_override_db}",
+        )
+
+    radio_res = build_radio_config(
+        hardware_id=hardware_id,
+        protocol_id=protocol_id,
+        season_id=season_id,
+    )
+    if not radio_res.ok or radio_res.value is None:
+        err = radio_res.error
+        return Result.fail(
+            code=err.code if err is not None else "RADIO_CONFIG_ERROR",
+            message=err.message if err is not None else "Failed to resolve radio config.",
+            details=err.details if err is not None else None,
+        )
+
+    noise_db = (
+        float(noise_override_db)
+        if noise_override_db is not None
+        else get_site_noise_penalty_db(site_type)
+    )
+    return Result.success(
+        SiteRadioProfile(
+            radio=radio_res.value,
+            noise_penalty_db=noise_db,
+            hardware_preset=hardware_id.strip().upper(),
+        )
+    )
+
+
 def list_all_presets() -> Dict[str, Any]:
-    """Return a JSON-serializable dictionary of all hardware, protocol, and seasonal presets."""
+    """Return a JSON-serializable dictionary of all hardware, protocol, seasonal, and client presets."""
     return {
         "hardware_presets": {k: v.model_dump() for k, v in HARDWARE_PRESETS.items()},
         "protocol_profiles": {k: v.model_dump() for k, v in PROTOCOL_PROFILES.items()},
         "seasonal_profiles": {k: v.model_dump() for k, v in SEASONAL_PROFILES.items()},
+        "client_environment_profiles": {
+            k: v.model_dump() for k, v in CLIENT_ENVIRONMENT_PROFILES.items()
+        },
+        "site_noise_penalties_db": {
+            k.value: v for k, v in SITE_NOISE_PENALTIES_DB.items()
+        },
     }

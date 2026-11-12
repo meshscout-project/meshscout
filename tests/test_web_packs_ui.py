@@ -270,3 +270,92 @@ def test_packs_api_returns_license_and_bounds_metadata(client: TestClient) -> No
         assert "row_count" in p or "site_count" in p
         assert "licenses" in p
         assert "bounds" in p
+
+
+# ---------------------------------------------------------------------------
+# 5. Dual-Mode Client vs Backhaul Controls, Payloads & Telemetry Badges
+# ---------------------------------------------------------------------------
+
+def test_dual_mode_client_and_viewshed_controls_in_html(client: TestClient) -> None:
+    """Verify index.html contains client preset, client environment, and viewshed direction controls."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+
+    # Client Device Preset selector & hardware options
+    assert 'id="client-preset-select"' in html
+    for preset_id in ("SENSECAP_T1000E", "HELTEC_V3_HOME", "RAK4631_SOLAR", "STATION_G2_BACKBONE"):
+        assert f'value="{preset_id}"' in html
+
+    # Client Environment selector & clutter profiles
+    assert 'id="client-env-select"' in html
+    for env_id in (
+        "OUTDOOR_CLEAR",
+        "BODY_WORN_POCKET",
+        "VEHICLE_CABIN",
+        "INDOOR_WINDOW",
+        "ROOFTOP_MAST",
+    ):
+        assert f'value="{env_id}"' in html
+
+    # Viewshed Direction selector
+    assert 'id="viewshed-direction-select"' in html
+    for direction in ("downlink", "uplink", "two_way"):
+        assert f'value="{direction}"' in html
+
+    # Fresnel Link Dock directional margin & reachability badge hooks
+    assert 'id="tel-dir-margins"' in html
+    assert 'id="tel-reachability"' in html
+    assert 'id="fresnel-reachability-badge"' in html
+    assert 'id="backhaul-preset-a"' in html
+    assert 'id="backhaul-preset-b"' in html
+
+
+def test_app_js_dual_mode_payloads_badges_and_viewshed_cache_keying(client: TestClient) -> None:
+    """Verify app.js wires dual-mode link payloads, alligator badges, A->B/B->A margins, and directional viewshed caching."""
+    resp = client.get("/static/app.js")
+    assert resp.status_code == 200
+    js = resp.text
+
+    # Selector bindings
+    assert "#client-preset-select" in js
+    assert "#client-env-select" in js
+    assert "#viewshed-direction-select" in js
+
+    # Dual-mode /api/link payload modes
+    assert 'evaluation_mode: "client"' in js
+    assert 'evaluation_mode: "backhaul"' in js
+
+    # Backhaul evaluation must never inject client_env clutter
+    bh_start = js.index("async function evaluateBackhaulLink")
+    bh_end = js.index("async function traceMeshRoute", bh_start)
+    bh_block = js[bh_start:bh_end]
+    assert 'evaluation_mode: "backhaul"' in bh_block
+    assert "source_preset" in bh_block
+    assert "target_preset" in bh_block
+    assert "client_env" not in bh_block
+
+    # Reachability state badge rendering (TWO-WAY vs ALLIGATOR (HEAR-ONLY) vs UPLINK-ONLY vs UNREACHABLE)
+    assert "two_way" in js
+    assert "TWO-WAY" in js
+    assert "hear_only_alligator" in js
+    assert "ALLIGATOR (HEAR-ONLY)" in js
+    assert "uplink_only" in js
+    assert "UPLINK-ONLY" in js
+    assert "unreachable" in js
+    assert "UNREACHABLE" in js
+
+    # Directional margins (DL / UL and A -> B / B -> A)
+    assert "downlink_margin_db" in js
+    assert "uplink_margin_db" in js
+    assert "A -> B" in js
+    assert "B -> A" in js
+
+    # Directional viewshed payload & viewshedCache keying
+    assert "buildViewshedCacheKey" in js
+    assert "viewshedCache" in js
+    assert "${origin.id}_${hw}_${proto}_${season}_${direction}_${clientPreset}_${clientEnv}" in js
+    assert "direction: direction" in js
+    assert "client_preset: clientPreset" in js
+    assert "client_env: clientEnv" in js
+

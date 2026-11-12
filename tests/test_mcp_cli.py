@@ -1232,6 +1232,7 @@ def test_mcp_cli_execution_sse_fallback(monkeypatch: pytest.MonkeyPatch) -> None
     assert uvicorn_runs == [("0.0.0.0", 8085)]
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_mcp_fallback_sse_app_endpoints() -> None:
     """Verify fallback ASGI app handles GET /sse and POST /messages endpoints."""
     import asyncio
@@ -1377,6 +1378,291 @@ def test_elevation_dem_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
 
     reader = HGTElevationTileReader()
     assert reader.dem_dir == custom_dem
+
+
+def test_cli_link_dual_mode_and_legacy_fallback(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify CLI `link` legacy symmetric fallback, `--mode client`, and `--mode backhaul`."""
+    # 1. Legacy symmetric fallback (no --mode, presets, or --client-env)
+    rc_leg = main(
+        [
+            "link",
+            "--source",
+            "44.5437,-72.8143,1339.0",
+            "--target",
+            "44.4900,-73.1100,105.0",
+            "--freq",
+            "915.0",
+            "--tx-power",
+            "20.0",
+            "--no-delay",
+            "--json",
+        ]
+    )
+    assert rc_leg == 0
+    out_leg = json.loads(capsys.readouterr().out)
+    assert out_leg["ok"] is True
+    assert "evaluation_mode" not in out_leg
+    assert out_leg["link_budget"]["reachability_state"] is None
+    assert out_leg["link_budget"]["link_margin_db"] > 10.0
+
+    # 2. Client mode with INDOOR_WINDOW clutter and high-site noise penalty
+    rc_cli = main(
+        [
+            "link",
+            "--source",
+            "44.5437,-72.8143,1339.0",
+            "--target",
+            "44.4900,-73.1100,105.0",
+            "--mode",
+            "client",
+            "--client-env",
+            "INDOOR_WINDOW",
+            "--source-noise-db",
+            "6.0",
+            "--json",
+        ]
+    )
+    assert rc_cli == 0
+    out_cli = json.loads(capsys.readouterr().out)
+    assert out_cli["ok"] is True
+    assert out_cli["evaluation_mode"] == "client"
+    assert out_cli["source_preset"] == "STATION_G2_BACKBONE"
+    assert out_cli["target_preset"] == "SENSECAP_T1000E"
+    assert out_cli["client_env"] == "INDOOR_WINDOW"
+    assert out_cli["client_env_loss_db"] == pytest.approx(8.0)
+    lb_cli = out_cli["link_budget"]
+    assert lb_cli["downlink_margin_db"] is not None
+    assert lb_cli["uplink_margin_db"] is not None
+    assert lb_cli["asymmetry_delta_db"] == pytest.approx(14.0)
+    assert lb_cli["reachability_state"] in ("two_way", "hear_only_alligator", "uplink_only", "unreachable")
+
+    # 3. Human-readable client mode output reports directional margins and reachability state
+    rc_txt = main(
+        [
+            "link",
+            "--source",
+            "44.5437,-72.8143,1339.0",
+            "--target",
+            "44.4900,-73.1100,105.0",
+            "--mode",
+            "client",
+            "--client-env",
+            "BODY_WORN_POCKET",
+        ]
+    )
+    assert rc_txt == 0
+    txt = capsys.readouterr().out
+    assert "Reachability:" in txt
+    assert "Downlink Margin:" in txt
+    assert "Uplink Margin:" in txt
+    assert "Asymmetry Delta:" in txt
+
+    # 4. Backhaul mode enforces 0.0 dB client clutter even when --client-env is supplied
+    rc_bh1 = main(
+        [
+            "link",
+            "--source",
+            "44.5437,-72.8143,1339.0",
+            "--target",
+            "44.3154,-72.8868,1244.0",
+            "--mode",
+            "backhaul",
+            "--json",
+        ]
+    )
+    assert rc_bh1 == 0
+    out_bh1 = json.loads(capsys.readouterr().out)
+
+    rc_bh2 = main(
+        [
+            "link",
+            "--source",
+            "44.5437,-72.8143,1339.0",
+            "--target",
+            "44.3154,-72.8868,1244.0",
+            "--mode",
+            "backhaul",
+            "--client-env",
+            "INDOOR_WINDOW",
+            "--json",
+        ]
+    )
+    assert rc_bh2 == 0
+    out_bh2 = json.loads(capsys.readouterr().out)
+    assert out_bh2["ok"] is True
+    assert out_bh2["evaluation_mode"] == "backhaul"
+    assert out_bh2["source_preset"] == "STATION_G2_BACKBONE"
+    assert out_bh2["target_preset"] == "RAK4631_SOLAR"
+    assert out_bh2["client_env_loss_db"] == 0.0
+    assert out_bh2["link_budget"]["total_path_loss_db"] == pytest.approx(
+        out_bh1["link_budget"]["total_path_loss_db"]
+    )
+
+
+def test_cli_reach_subcommand_json_and_text(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify CLI `reach` seeds bundled fixtures on empty DB and ranks two-way vs alligator towers."""
+    db_file = tmp_path / "ephemeral_reach.db"
+    rc_json = main(
+        [
+            "reach",
+            "--lat",
+            "44.4900",
+            "--lon",
+            "-73.1100",
+            "--client-preset",
+            "SENSECAP_T1000E",
+            "--client-env",
+            "INDOOR_WINDOW",
+            "--db-path",
+            str(db_file),
+            "--json",
+        ]
+    )
+    assert rc_json == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert data["client_preset"] == "SENSECAP_T1000E"
+    assert data["client_env"] == "INDOOR_WINDOW"
+    assert data["client_env_loss_db"] == pytest.approx(8.0)
+    towers = data["ranked_towers"]
+    assert len(towers) >= 10
+
+    state_rank = {"two_way": 3, "hear_only_alligator": 2, "uplink_only": 1, "unreachable": 0}
+    priorities = [state_rank[t["reachability_state"]] for t in towers]
+    assert priorities == sorted(priorities, reverse=True)
+    for item in towers:
+        assert item["downlink_margin_db"] is not None
+        assert item["uplink_margin_db"] is not None
+        assert item["downlink_margin_db"] > item["uplink_margin_db"]
+
+    rc_txt = main(
+        [
+            "reach",
+            "--lat",
+            "44.4900",
+            "--lon",
+            "-73.1100",
+            "--db-path",
+            str(db_file),
+        ]
+    )
+    assert rc_txt == 0
+    txt_out = capsys.readouterr().out
+    assert "Two-Way Towers:" in txt_out
+    assert "Hear-Only Alligator Towers:" in txt_out
+
+
+def test_mcp_dual_mode_link_reach_and_hardware_resource(tmp_path: Path) -> None:
+    """Verify MCP `evaluate_link_budget` dual-mode, `manage_living_mesh_state(check_reach)`, and hardware resource."""
+    db_file = str(tmp_path / "mcp_dual_mode.db")
+    server = MeshScoutMCPServer(db_path=db_file)
+
+    # 1. MCP evaluate_link_budget client mode vs backhaul mode (enforcing 0 dB clutter)
+    resp_client = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 201,
+            "method": "tools/call",
+            "params": {
+                "name": "evaluate_link_budget",
+                "arguments": {
+                    "source_lat": 44.5437,
+                    "source_lon": -72.8143,
+                    "source_elev_m": 1339.0,
+                    "target_lat": 44.4900,
+                    "target_lon": -73.1100,
+                    "target_elev_m": 105.0,
+                    "evaluation_mode": "client",
+                    "client_env": "VEHICLE_CABIN",
+                    "source_noise_penalty_db": 3.0,
+                },
+            },
+        }
+    )
+    assert resp_client is not None
+    assert resp_client["result"]["isError"] is False
+    sc_client = resp_client["result"]["structuredContent"]
+    assert sc_client["evaluation_mode"] == "client"
+    assert sc_client["client_env_loss_db"] == pytest.approx(6.0)
+    assert sc_client["link_budget"]["reachability_state"] is not None
+    assert sc_client["link_budget"]["asymmetry_delta_db"] == pytest.approx(11.0)
+
+    resp_backhaul = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 202,
+            "method": "tools/call",
+            "params": {
+                "name": "evaluate_link_budget",
+                "arguments": {
+                    "source_lat": 44.5437,
+                    "source_lon": -72.8143,
+                    "source_elev_m": 1339.0,
+                    "target_lat": 44.3154,
+                    "target_lon": -72.8868,
+                    "target_elev_m": 1244.0,
+                    "evaluation_mode": "backhaul",
+                    "client_env": "INDOOR_WINDOW",
+                },
+            },
+        }
+    )
+    assert resp_backhaul is not None
+    assert resp_backhaul["result"]["isError"] is False
+    sc_bh = resp_backhaul["result"]["structuredContent"]
+    assert sc_bh["evaluation_mode"] == "backhaul"
+    assert sc_bh["client_env_loss_db"] == 0.0
+    assert sc_bh["target_preset"] == "RAK4631_SOLAR"
+
+    # 2. MCP manage_living_mesh_state(action="check_reach")
+    resp_reach = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 203,
+            "method": "tools/call",
+            "params": {
+                "name": "manage_living_mesh_state",
+                "arguments": {
+                    "action": "check_reach",
+                    "home_lat": 44.4900,
+                    "home_lon": -73.1100,
+                    "client_preset": "SENSECAP_T1000E",
+                    "client_env": "BODY_WORN_POCKET",
+                },
+            },
+        }
+    )
+    assert resp_reach is not None
+    assert resp_reach["result"]["isError"] is False
+    sc_reach = resp_reach["result"]["structuredContent"]
+    assert sc_reach["ok"] is True
+    assert sc_reach["action"] == "check_reach"
+    assert sc_reach["client_env_loss_db"] == pytest.approx(4.0)
+    assert len(sc_reach["ranked_towers"]) >= 10
+    first_tower = sc_reach["ranked_towers"][0]
+    assert "uplink_margin_db" in first_tower and first_tower["uplink_margin_db"] is not None
+    assert "downlink_margin_db" in first_tower and first_tower["downlink_margin_db"] is not None
+    assert first_tower["reachability_state"] in ("two_way", "hear_only_alligator", "uplink_only", "unreachable")
+
+    # 3. MCP resource meshscout://presets/hardware exposes CLIENT_ENVIRONMENT_PROFILES & noise penalties
+    resp_hw = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 204,
+            "method": "resources/read",
+            "params": {"uri": "meshscout://presets/hardware"},
+        }
+    )
+    assert resp_hw is not None
+    hw_payload = json.loads(resp_hw["result"]["contents"][0]["text"])
+    assert "RAK4631_SOLAR" in hw_payload
+    assert "client_environment_profiles" in hw_payload
+    assert hw_payload["client_environment_profiles"]["INDOOR_WINDOW"]["clutter_loss_db"] == pytest.approx(8.0)
+    assert "site_noise_penalties_db" in hw_payload
+    assert hw_payload["site_noise_penalties_db"]["communications_tower"] == pytest.approx(6.0)
+
 
 
 

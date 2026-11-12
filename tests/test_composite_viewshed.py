@@ -1,7 +1,20 @@
 """Unit tests for Multi-Origin Composite Viewshed and Backhaul Link Matrix Engine."""
 
 import pytest
-from meshscout.core.contracts import Coordinate, RadioConfig, SiteCandidate
+from meshscout.core.contracts import (
+    Coordinate,
+    RadioConfig,
+    ReachabilityState,
+    SiteCandidate,
+    SiteRadioProfile,
+    SiteType,
+)
+from meshscout.core.presets import (
+    CLIENT_ENVIRONMENT_PROFILES,
+    HARDWARE_PRESETS,
+    build_radio_config,
+    resolve_site_radio_profile,
+)
 from meshscout.core.composite_viewshed import (
     BackhaulLinkStatus,
     CompositeViewshedResult,
@@ -217,3 +230,332 @@ def test_custom_radio_config_affects_viewshed(mansfield_site):
     assert res.ok is True
     assert res.value is not None
     assert res.value.total_illuminated_area_sq_km > 0.0
+
+
+def test_legacy_symmetric_defaults_preserve_none_directional_fields(
+    mansfield_site: SiteCandidate,
+    bolton_site: SiteCandidate,
+) -> None:
+    """Verify legacy symmetric mode preserves exact behavior and leaves directional fields None."""
+    res = compute_composite_viewshed(
+        origins=[mansfield_site, bolton_site],
+        max_range_km=50.0,
+        num_radials=36,
+    )
+    assert res.ok is True
+    assert res.value is not None
+
+    cv = res.value
+    assert cv.direction == "downlink"
+    assert len(cv.intersite_backhaul_links) == 1
+
+    link = cv.intersite_backhaul_links[0]
+    assert link.forward_margin_db is None
+    assert link.reverse_margin_db is None
+    assert link.reachability_state is None
+    assert callable(_synthetic_vermont_elevation_fn)
+    assert _synthetic_vermont_elevation_fn(44.5437, -72.8143) > 1000.0
+
+
+def test_invalid_direction_returns_error(mansfield_site: SiteCandidate) -> None:
+    """Verify invalid direction strings return Result.fail('INVALID_DIRECTION', ...)."""
+    bad_res = compute_composite_viewshed(
+        origins=[mansfield_site],
+        direction="sideways_invalid",
+    )
+    assert bad_res.ok is False
+    assert bad_res.error is not None
+    assert bad_res.error.code == "INVALID_DIRECTION"
+
+    bad_empty_res = compute_composite_viewshed(
+        origins=[],
+        direction="not_a_direction",
+    )
+    assert bad_empty_res.ok is False
+    assert bad_empty_res.error is not None
+    assert bad_empty_res.error.code == "INVALID_DIRECTION"
+
+
+def test_directional_composite_footprint_and_town_illumination_shrinkage(
+    mansfield_site: SiteCandidate,
+    bolton_site: SiteCandidate,
+) -> None:
+    """Verify directional composite footprint and town illumination shrinkage:
+    two_way <= min(uplink, downlink) and strict uplink < downlink when pairing
+    STATION_G2_BACKBONE summits with a SENSECAP_T1000E + VEHICLE_CABIN handheld.
+    """
+    g2_hw = HARDWARE_PRESETS["STATION_G2_BACKBONE"]
+    t1000e_hw = HARDWARE_PRESETS["SENSECAP_T1000E"]
+    vehicle_env = CLIENT_ENVIRONMENT_PROFILES["VEHICLE_CABIN"]
+
+    # Model -124 dBm high-speed modulation with 16 dB mobile fade reserve (-108 dBm effective)
+    # and summer foliage (8.5 dB) so RF cutoff occurs inside the 60 km Vermont basin window.
+    summit_radio = RadioConfig(
+        frequency_mhz=915.0,
+        tx_power_dbm=g2_hw.tx_power_dbm,
+        rx_sensitivity_dbm=-108.0,
+        antenna_gain_dbi=g2_hw.antenna_gain_dbi,
+        cable_loss_db=g2_hw.cable_loss_db,
+        environmental_clutter_db=8.5,
+    )
+    handheld_radio = RadioConfig(
+        frequency_mhz=915.0,
+        tx_power_dbm=t1000e_hw.tx_power_dbm,
+        rx_sensitivity_dbm=-108.0,
+        antenna_gain_dbi=t1000e_hw.antenna_gain_dbi,
+        cable_loss_db=t1000e_hw.cable_loss_db,
+        environmental_clutter_db=8.5,
+    )
+
+    mansfield_comm = mansfield_site.model_copy(update={"site_type": SiteType.COMMUNICATIONS_TOWER})
+    bolton_peak = bolton_site.model_copy(update={"site_type": SiteType.MOUNTAIN_PEAK})
+    origins = [mansfield_comm, bolton_peak]
+
+    site_profiles = {
+        mansfield_comm.site_id: SiteRadioProfile(
+            radio=summit_radio,
+            noise_penalty_db=6.0,
+            hardware_preset="STATION_G2_BACKBONE",
+        ),
+        bolton_peak.site_id: SiteRadioProfile(
+            radio=summit_radio,
+            noise_penalty_db=3.0,
+            hardware_preset="STATION_G2_BACKBONE",
+        ),
+    }
+
+    reference_towns = {
+        "Underhill": {
+            "name": "Underhill",
+            "lat": 44.5275,
+            "lon": -72.8950,
+            "elevation_m": 215.0,
+        },
+        "Burlington": {
+            "name": "Burlington",
+            "lat": 44.4759,
+            "lon": -73.2121,
+            "elevation_m": 65.0,
+        },
+    }
+
+    common_kwargs = dict(
+        origins=origins,
+        max_range_km=60.0,
+        num_radials=36,
+        reference_towns=reference_towns,
+        radio_config=summit_radio,
+        client_radio=handheld_radio,
+        client_rx_height_m=vehicle_env.default_agl_m,
+        client_env_loss_db=vehicle_env.clutter_loss_db,
+        site_profiles=site_profiles,
+    )
+
+    down_res = compute_composite_viewshed(**common_kwargs, direction="downlink")
+    up_res = compute_composite_viewshed(**common_kwargs, direction="uplink")
+    twoway_res = compute_composite_viewshed(**common_kwargs, direction="two_way")
+
+    assert down_res.ok and down_res.value is not None
+    assert up_res.ok and up_res.value is not None
+    assert twoway_res.ok and twoway_res.value is not None
+
+    down_cv = down_res.value
+    up_cv = up_res.value
+    twoway_cv = twoway_res.value
+
+    assert down_cv.direction == "downlink"
+    assert up_cv.direction == "uplink"
+    assert twoway_cv.direction == "two_way"
+
+    # Composite footprint area: strict uplink < downlink and two_way <= min(uplink, downlink)
+    assert up_cv.total_illuminated_area_sq_km < down_cv.total_illuminated_area_sq_km
+    assert twoway_cv.total_illuminated_area_sq_km <= min(
+        up_cv.total_illuminated_area_sq_km,
+        down_cv.total_illuminated_area_sq_km,
+    )
+
+    # Town illumination respects RF link-budget polygon cutoff (no pure-optical override!):
+    # Burlington (~32.5 km) hears the 28 dBm summit on downlink ("alligator"), but its
+    # 20 dBm vehicle-attenuated handheld uplink fails to close back to the noisy summits.
+    assert "Underhill" in down_cv.illuminated_towns
+    assert "Burlington" in down_cv.illuminated_towns
+    assert "Underhill" in up_cv.illuminated_towns
+    assert "Burlington" not in up_cv.illuminated_towns
+    assert "Burlington" not in twoway_cv.illuminated_towns
+    assert len(up_cv.illuminated_towns) < len(down_cv.illuminated_towns)
+    assert len(twoway_cv.illuminated_towns) <= min(
+        len(up_cv.illuminated_towns),
+        len(down_cv.illuminated_towns),
+    )
+
+    # Also verify unmodified preset sensitivity (RETICULUM_RNODE_FAST + SUMMER_LEAF_ON) over 130 km horizon
+    g2_preset = resolve_site_radio_profile(
+        site_type=SiteType.COMMUNICATIONS_TOWER,
+        hardware_id="STATION_G2_BACKBONE",
+        protocol_id="RETICULUM_RNODE_FAST",
+        season_id="SUMMER_LEAF_ON",
+    ).value
+    t1000e_preset = build_radio_config(
+        hardware_id="SENSECAP_T1000E",
+        protocol_id="RETICULUM_RNODE_FAST",
+        season_id="SUMMER_LEAF_ON",
+    ).value
+    assert g2_preset is not None and t1000e_preset is not None
+
+    preset_down = compute_composite_viewshed(
+        origins=[mansfield_comm],
+        max_range_km=130.0,
+        num_radials=36,
+        client_radio=t1000e_preset,
+        client_rx_height_m=vehicle_env.default_agl_m,
+        client_env_loss_db=vehicle_env.clutter_loss_db,
+        site_profiles={mansfield_comm.site_id: g2_preset},
+        direction="downlink",
+    ).value
+    preset_up = compute_composite_viewshed(
+        origins=[mansfield_comm],
+        max_range_km=130.0,
+        num_radials=36,
+        client_radio=t1000e_preset,
+        client_rx_height_m=vehicle_env.default_agl_m,
+        client_env_loss_db=vehicle_env.clutter_loss_db,
+        site_profiles={mansfield_comm.site_id: g2_preset},
+        direction="uplink",
+    ).value
+    preset_twoway = compute_composite_viewshed(
+        origins=[mansfield_comm],
+        max_range_km=130.0,
+        num_radials=36,
+        client_radio=t1000e_preset,
+        client_rx_height_m=vehicle_env.default_agl_m,
+        client_env_loss_db=vehicle_env.clutter_loss_db,
+        site_profiles={mansfield_comm.site_id: g2_preset},
+        direction="two_way",
+    ).value
+    assert preset_down is not None and preset_up is not None and preset_twoway is not None
+    assert preset_up.total_illuminated_area_sq_km < preset_down.total_illuminated_area_sq_km
+    assert preset_twoway.total_illuminated_area_sq_km <= min(
+        preset_up.total_illuminated_area_sq_km,
+        preset_down.total_illuminated_area_sq_km,
+    )
+
+
+def test_heterogeneous_summit_to_relay_intersite_backhaul_links() -> None:
+    """Verify heterogeneous summit-to-relay intersite_backhaul_links
+    (28 dBm noisy commercial tower <-> 22 dBm quiet solar water tank) populate
+    forward_margin_db, reverse_margin_db, reachability_state, and set
+    link_margin_db == min(forward_margin_db, reverse_margin_db).
+    """
+    summit_tower = SiteCandidate(
+        site_id="VT-SUMMIT-COMM-01",
+        name="Mount Mansfield Commercial Tower",
+        location=Coordinate(lat=44.5437, lon=-72.8143, elevation_m=1339.0),
+        site_type=SiteType.COMMUNICATIONS_TOWER,
+        mast_height_m=20.0,
+        has_grid_power=True,
+    )
+    solar_water_tank = SiteCandidate(
+        site_id="VT-RELAY-TANK-01",
+        name="Essex Foothill Solar Water Tank",
+        location=Coordinate(lat=44.4950, lon=-73.0850, elevation_m=195.0),
+        site_type=SiteType.WATER_TOWER,
+        mast_height_m=18.0,
+        has_grid_power=False,
+    )
+
+    tower_profile = resolve_site_radio_profile(
+        site_type=SiteType.COMMUNICATIONS_TOWER,
+        hardware_id="STATION_G2_BACKBONE",
+        protocol_id="MESHTASTIC_LONGFAST",
+        season_id="SUMMER_LEAF_ON",
+    ).value
+    tank_profile = resolve_site_radio_profile(
+        site_type=SiteType.WATER_TOWER,
+        hardware_id="RAK4631_SOLAR",
+        protocol_id="MESHTASTIC_LONGFAST",
+        season_id="SUMMER_LEAF_ON",
+    ).value
+    assert tower_profile is not None and tank_profile is not None
+    assert tower_profile.radio.tx_power_dbm == 28.0
+    assert tower_profile.noise_penalty_db == 6.0
+    assert tank_profile.radio.tx_power_dbm == 22.0
+    assert tank_profile.noise_penalty_db == 1.0
+
+    res = compute_composite_viewshed(
+        origins=[summit_tower, solar_water_tank],
+        max_range_km=50.0,
+        num_radials=24,
+        site_profiles={
+            summit_tower.site_id: tower_profile,
+            solar_water_tank.site_id: tank_profile,
+        },
+        direction="two_way",
+    )
+    assert res.ok is True
+    assert res.value is not None
+    assert len(res.value.intersite_backhaul_links) == 1
+
+    link = res.value.intersite_backhaul_links[0]
+    assert link.site_a_id == "VT-SUMMIT-COMM-01"
+    assert link.site_b_id == "VT-RELAY-TANK-01"
+    assert link.forward_margin_db is not None
+    assert link.reverse_margin_db is not None
+    assert link.reachability_state == ReachabilityState.TWO_WAY
+
+    # 28 dBm TX into 1 dB noise tank vs 22 dBm TX into 6 dB noise tower -> +11.0 dB forward advantage
+    assert link.forward_margin_db > link.reverse_margin_db
+    assert link.forward_margin_db - link.reverse_margin_db == pytest.approx(11.0, abs=0.05)
+    assert link.link_margin_db == min(link.forward_margin_db, link.reverse_margin_db)
+    assert link.link_margin_db == link.reverse_margin_db
+
+    # Verify fallback to SiteRadioProfile(radio=active_radio, noise_penalty_db=get_site_noise_penalty_db(...))
+    # when a site is omitted from site_profiles, plus HEAR_ONLY_ALLIGATOR on obstructed cross-ridge path
+    west_comm = SiteCandidate(
+        site_id="VT-WEST-COMM",
+        name="Western Valley Commercial Tower",
+        location=Coordinate(lat=44.4759, lon=-73.2200, elevation_m=35.0),
+        site_type=SiteType.COMMUNICATIONS_TOWER,
+        mast_height_m=10.0,
+    )
+    east_tank = SiteCandidate(
+        site_id="VT-EAST-TANK",
+        name="Eastern Valley Solar Water Tank",
+        location=Coordinate(lat=44.4654, lon=-72.6874, elevation_m=220.0),
+        site_type=SiteType.WATER_TOWER,
+        mast_height_m=10.0,
+    )
+    tight_tower_radio = tower_profile.radio.model_copy(update={"rx_sensitivity_dbm": -125.0})
+    tight_tank_radio = tank_profile.radio.model_copy(update={"rx_sensitivity_dbm": -125.0})
+
+    partial_res = compute_composite_viewshed(
+        origins=[west_comm, east_tank],
+        max_range_km=40.0,
+        num_radials=16,
+        radio_config=tight_tank_radio,
+        site_profiles={
+            west_comm.site_id: SiteRadioProfile(
+                radio=tight_tower_radio,
+                noise_penalty_db=6.0,
+                hardware_preset="STATION_G2_BACKBONE",
+            ),
+            # east_tank intentionally omitted to verify fallback using radio_config + WATER_TOWER (1.0 dB)
+        },
+    )
+    assert partial_res.ok is True
+    assert partial_res.value is not None
+    obstructed_link = partial_res.value.intersite_backhaul_links[0]
+    assert obstructed_link.forward_margin_db is not None
+    assert obstructed_link.reverse_margin_db is not None
+    assert obstructed_link.forward_margin_db - obstructed_link.reverse_margin_db == pytest.approx(
+        11.0, abs=0.05
+    )
+    assert obstructed_link.link_margin_db == min(
+        obstructed_link.forward_margin_db, obstructed_link.reverse_margin_db
+    )
+    assert obstructed_link.reachability_state in (
+        ReachabilityState.HEAR_ONLY_ALLIGATOR,
+        ReachabilityState.TWO_WAY,
+        ReachabilityState.UNREACHABLE,
+    )
+
+

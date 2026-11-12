@@ -17,11 +17,15 @@ from meshscout.core.contracts import (
     ElevationPoint,
     ElevationProfile,
     RadioConfig,
+    ReachabilityState,
     Result,
     SiteCandidate,
+    SiteRadioProfile,
 )
 from meshscout.core.itm import evaluate_point_to_point_link
+from meshscout.core.presets import get_site_noise_penalty_db
 from meshscout.core.viewshed import (
+    VALID_DIRECTIONS,
     compute_radial_viewshed_polygon,
     haversine_distance_km,
 )
@@ -137,6 +141,9 @@ class BackhaulLinkStatus(BaseModel):
     has_line_of_sight: bool
     link_margin_db: float
     fresnel_clearance_ratio: float
+    forward_margin_db: Optional[float] = Field(default=None)
+    reverse_margin_db: Optional[float] = Field(default=None)
+    reachability_state: Optional[ReachabilityState] = Field(default=None)
 
 
 class CompositeViewshedResult(BaseModel):
@@ -163,6 +170,10 @@ class CompositeViewshedResult(BaseModel):
         default_factory=list,
         description="Pairwise line-of-sight analysis between the candidate sites",
     )
+    direction: str = Field(
+        default="downlink",
+        description="Evaluated RF link direction ('downlink', 'uplink', or 'two_way')",
+    )
 
 
 def compute_composite_viewshed(
@@ -172,6 +183,11 @@ def compute_composite_viewshed(
     elevation_fn: Optional[Callable[[float, float], float]] = None,
     reference_towns: Optional[Dict[str, Dict[str, Any]]] = None,
     radio_config: Optional[RadioConfig] = None,
+    client_radio: Optional[RadioConfig] = None,
+    client_rx_height_m: Optional[float] = None,
+    client_env_loss_db: float = 0.0,
+    direction: str = "downlink",
+    site_profiles: Optional[Dict[str, SiteRadioProfile]] = None,
 ) -> Result[CompositeViewshedResult]:
     """Compute combined multi-origin viewshed coverage, illuminated towns, and inter-site backhaul links.
 
@@ -182,11 +198,22 @@ def compute_composite_viewshed(
         elevation_fn: Optional digital elevation model lookup function (lat, lon) -> elevation_m.
         reference_towns: Optional dictionary of municipal reference town locations.
         radio_config: Optional RF transceiver configuration.
+        client_radio: Optional client RadioConfig for asymmetric link budgets.
+        client_rx_height_m: Optional client antenna height above ground in meters.
+        client_env_loss_db: Additional client environment clutter/vehicle loss in dB.
+        direction: Evaluation direction ('downlink', 'uplink', or 'two_way').
+        site_profiles: Optional per-site SiteRadioProfile lookup keyed by site_id.
 
     Returns:
         Result[CompositeViewshedResult] with individual & composite polygons, illuminated towns,
         and pairwise backhaul link statuses.
     """
+    if direction not in VALID_DIRECTIONS:
+        return Result.fail(
+            code="INVALID_DIRECTION",
+            message=f"Invalid viewshed direction '{direction}'. Must be one of {VALID_DIRECTIONS}.",
+        )
+
     if not origins:
         return Result.success(
             CompositeViewshedResult(
@@ -196,8 +223,24 @@ def compute_composite_viewshed(
                 total_illuminated_area_sq_km=0.0,
                 illuminated_towns=[],
                 intersite_backhaul_links=[],
+                direction=direction,
             )
         )
+
+    is_legacy_symmetric = (
+        client_radio is None
+        and client_rx_height_m is None
+        and client_env_loss_db == 0.0
+        and direction == "downlink"
+        and site_profiles is None
+    )
+    is_asymmetric_town_mode = (
+        client_radio is not None
+        or direction != "downlink"
+        or site_profiles is not None
+        or client_rx_height_m is not None
+        or client_env_loss_db != 0.0
+    )
 
     active_elevation_fn: Callable[[float, float], float] = (
         elevation_fn if elevation_fn is not None else _synthetic_vermont_elevation_fn
@@ -211,13 +254,33 @@ def compute_composite_viewshed(
 
     # 1. Compute radial viewshed polygon for each candidate site
     for site in origins:
-        res = compute_radial_viewshed_polygon(
-            origin=site,
-            num_radials=num_radials,
-            max_range_km=max_range_km,
-            radio=active_radio,
-            elevation_fn=active_elevation_fn,
-        )
+        if is_legacy_symmetric:
+            res = compute_radial_viewshed_polygon(
+                origin=site,
+                num_radials=num_radials,
+                max_range_km=max_range_km,
+                radio=active_radio,
+                elevation_fn=active_elevation_fn,
+            )
+        else:
+            site_prof = site_profiles.get(site.site_id) if site_profiles is not None else None
+            if site_prof is None:
+                site_prof = SiteRadioProfile(
+                    radio=active_radio,
+                    noise_penalty_db=get_site_noise_penalty_db(site.site_type),
+                )
+            res = compute_radial_viewshed_polygon(
+                origin=site,
+                num_radials=num_radials,
+                max_range_km=max_range_km,
+                radio=site_prof.radio,
+                elevation_fn=active_elevation_fn,
+                client_radio=client_radio,
+                client_rx_height_m=client_rx_height_m,
+                client_env_loss_db=client_env_loss_db,
+                site_noise_penalty_db=site_prof.noise_penalty_db,
+                direction=direction,
+            )
         if not res.ok or res.value is None:
             continue
 
@@ -264,6 +327,11 @@ def compute_composite_viewshed(
                         has_line_of_sight=True,
                         link_margin_db=99.0,
                         fresnel_clearance_ratio=1.0,
+                        forward_margin_db=99.0 if site_profiles is not None else None,
+                        reverse_margin_db=99.0 if site_profiles is not None else None,
+                        reachability_state=(
+                            ReachabilityState.TWO_WAY if site_profiles is not None else None
+                        ),
                     )
                 )
                 continue
@@ -298,29 +366,92 @@ def compute_composite_viewshed(
                 points=points,
             )
 
-            link_res = evaluate_point_to_point_link(profile=profile, radio=active_radio)
-            if link_res.ok and link_res.value is not None:
-                intersite_backhaul_links.append(
-                    BackhaulLinkStatus(
-                        site_a_id=site_a.site_id,
-                        site_b_id=site_b.site_id,
-                        distance_km=round(link_res.value.distance_km, 3),
-                        has_line_of_sight=link_res.value.has_line_of_sight,
-                        link_margin_db=round(link_res.value.link_margin_db, 2),
-                        fresnel_clearance_ratio=round(link_res.value.fresnel_clearance_ratio, 3),
+            if site_profiles is not None:
+                prof_a = site_profiles.get(site_a.site_id)
+                if prof_a is None:
+                    prof_a = SiteRadioProfile(
+                        radio=active_radio,
+                        noise_penalty_db=get_site_noise_penalty_db(site_a.site_type),
                     )
+                prof_b = site_profiles.get(site_b.site_id)
+                if prof_b is None:
+                    prof_b = SiteRadioProfile(
+                        radio=active_radio,
+                        noise_penalty_db=get_site_noise_penalty_db(site_b.site_type),
+                    )
+                link_res = evaluate_point_to_point_link(
+                    profile=profile,
+                    radio=prof_a.radio,
+                    target_radio=prof_b.radio,
+                    source_noise_penalty_db=prof_a.noise_penalty_db,
+                    target_noise_penalty_db=prof_b.noise_penalty_db,
+                    client_env_loss_db=0.0,
                 )
+                if (
+                    link_res.ok
+                    and link_res.value is not None
+                    and link_res.value.downlink_margin_db is not None
+                    and link_res.value.uplink_margin_db is not None
+                ):
+                    forward_margin_db = round(link_res.value.downlink_margin_db, 2)
+                    reverse_margin_db = round(link_res.value.uplink_margin_db, 2)
+                    intersite_backhaul_links.append(
+                        BackhaulLinkStatus(
+                            site_a_id=site_a.site_id,
+                            site_b_id=site_b.site_id,
+                            distance_km=round(link_res.value.distance_km, 3),
+                            has_line_of_sight=link_res.value.has_line_of_sight,
+                            link_margin_db=round(
+                                min(
+                                    link_res.value.downlink_margin_db,
+                                    link_res.value.uplink_margin_db,
+                                ),
+                                2,
+                            ),
+                            fresnel_clearance_ratio=round(link_res.value.fresnel_clearance_ratio, 3),
+                            forward_margin_db=forward_margin_db,
+                            reverse_margin_db=reverse_margin_db,
+                            reachability_state=link_res.value.reachability_state,
+                        )
+                    )
+                else:
+                    intersite_backhaul_links.append(
+                        BackhaulLinkStatus(
+                            site_a_id=site_a.site_id,
+                            site_b_id=site_b.site_id,
+                            distance_km=round(dist_km, 3),
+                            has_line_of_sight=False,
+                            link_margin_db=-99.0,
+                            fresnel_clearance_ratio=0.0,
+                            forward_margin_db=-99.0,
+                            reverse_margin_db=-99.0,
+                            reachability_state=ReachabilityState.UNREACHABLE,
+                        )
+                    )
             else:
-                intersite_backhaul_links.append(
-                    BackhaulLinkStatus(
-                        site_a_id=site_a.site_id,
-                        site_b_id=site_b.site_id,
-                        distance_km=round(dist_km, 3),
-                        has_line_of_sight=False,
-                        link_margin_db=-99.0,
-                        fresnel_clearance_ratio=0.0,
+                link_res = evaluate_point_to_point_link(profile=profile, radio=active_radio)
+                if link_res.ok and link_res.value is not None:
+                    intersite_backhaul_links.append(
+                        BackhaulLinkStatus(
+                            site_a_id=site_a.site_id,
+                            site_b_id=site_b.site_id,
+                            distance_km=round(link_res.value.distance_km, 3),
+                            has_line_of_sight=link_res.value.has_line_of_sight,
+                            link_margin_db=round(link_res.value.link_margin_db, 2),
+                            fresnel_clearance_ratio=round(link_res.value.fresnel_clearance_ratio, 3),
+                        )
                     )
-                )
+                else:
+                    intersite_backhaul_links.append(
+                        BackhaulLinkStatus(
+                            site_a_id=site_a.site_id,
+                            site_b_id=site_b.site_id,
+                            distance_km=round(dist_km, 3),
+                            has_line_of_sight=False,
+                            link_margin_db=-99.0,
+                            fresnel_clearance_ratio=0.0,
+                        )
+                    )
 
     # 4. Determine municipal reference town illumination
     towns_data: Dict[str, Dict[str, Any]] = reference_towns if reference_towns is not None else {}
@@ -347,6 +478,9 @@ def compute_composite_viewshed(
             if poly and _point_in_polygon(t_lon, t_lat, poly):
                 is_illuminated = True
                 break
+
+            if is_asymmetric_town_mode and poly:
+                continue
 
             # Fallback check if within max_range_km with direct line of sight
             d_to_site = haversine_distance_km(
@@ -377,5 +511,6 @@ def compute_composite_viewshed(
             total_illuminated_area_sq_km=total_illuminated_area_sq_km,
             illuminated_towns=illuminated_towns,
             intersite_backhaul_links=intersite_backhaul_links,
+            direction=direction,
         )
     )

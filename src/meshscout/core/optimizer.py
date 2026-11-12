@@ -17,10 +17,13 @@ from meshscout.core.contracts import (
     ElevationPoint,
     ElevationProfile,
     RadioConfig,
+    ReachabilityState,
     Result,
     SiteCandidate,
+    SiteRadioProfile,
 )
 from meshscout.core.itm import evaluate_point_to_point_link
+from meshscout.core.presets import get_site_noise_penalty_db
 from meshscout.core.viewshed import ViewshedResult
 
 # Relative deployment cost multipliers by physical access difficulty
@@ -321,6 +324,9 @@ class MeshHopLeg(BaseModel):
     distance_km: float
     link_margin_db: float
     has_line_of_sight: bool
+    forward_margin_db: Optional[float] = Field(default=None)
+    reverse_margin_db: Optional[float] = Field(default=None)
+    reachability_state: Optional[ReachabilityState] = Field(default=None)
 
 
 class MeshRouteResult(BaseModel):
@@ -337,13 +343,12 @@ class MeshRouteResult(BaseModel):
     guidance: str = ""
 
 
-def _eval_hop_leg(
+def _build_leg_profile(
     s1: SiteCandidate,
     s2: SiteCandidate,
-    radio: RadioConfig,
     elevation_fn: Optional[Callable[[float, float], float]] = None,
-) -> Tuple[float, float, bool]:
-    """Helper to evaluate distance_km, link_margin_db, has_los between two nodes."""
+) -> Tuple[float, ElevationProfile]:
+    """Build 15-sample ElevationProfile between two nodes."""
     d_km = math.sqrt(
         ((s1.location.lat - s2.location.lat) * 111.13) ** 2
         + ((s1.location.lon - s2.location.lon) * 80.0) ** 2
@@ -369,11 +374,131 @@ def _eval_hop_leg(
                 coordinate=Coordinate(lat=lat, lon=lon, elevation_m=elev),
             )
         )
-    prof = ElevationProfile(source_site=s1, target_site=s2, distance_km=d_km, points=points)
+    return d_km, ElevationProfile(source_site=s1, target_site=s2, distance_km=d_km, points=points)
+
+
+def _eval_hop_leg(
+    s1: SiteCandidate,
+    s2: SiteCandidate,
+    radio: RadioConfig,
+    elevation_fn: Optional[Callable[[float, float], float]] = None,
+) -> Tuple[float, float, bool]:
+    """Helper to evaluate distance_km, link_margin_db, has_los between two nodes."""
+    d_km, prof = _build_leg_profile(s1, s2, elevation_fn)
     lb_res = evaluate_point_to_point_link(prof, radio=radio)
     if lb_res.ok and lb_res.value is not None:
         return (round(d_km, 2), round(lb_res.value.link_margin_db, 1), lb_res.value.has_line_of_sight)
     return (round(d_km, 2), -99.0, False)
+
+
+def _eval_mesh_hop_leg(
+    s1: SiteCandidate,
+    s2: SiteCandidate,
+    origin: SiteCandidate,
+    destination: SiteCandidate,
+    active_radio: RadioConfig,
+    elevation_fn: Optional[Callable[[float, float], float]],
+    min_link_margin_db: float,
+    is_asymmetric: bool,
+    origin_client_radio: Optional[RadioConfig],
+    destination_client_radio: Optional[RadioConfig],
+    client_env_loss_db: float,
+    site_profiles: Optional[Dict[str, SiteRadioProfile]],
+) -> Tuple[MeshHopLeg, bool]:
+    """Evaluate a hop leg in either legacy symmetric mode or bidirectional asymmetric mode."""
+    if not is_asymmetric:
+        d_km, m_db, has_los = _eval_hop_leg(s1, s2, active_radio, elevation_fn)
+        leg = MeshHopLeg(
+            source_site_id=s1.site_id,
+            source_name=s1.name,
+            target_site_id=s2.site_id,
+            target_name=s2.name,
+            distance_km=d_km,
+            link_margin_db=m_db,
+            has_line_of_sight=has_los,
+        )
+        return leg, (m_db >= min_link_margin_db)
+
+    is_origin_client = s1.site_id == origin.site_id and origin_client_radio is not None
+    if is_origin_client and origin_client_radio is not None:
+        prof_a = SiteRadioProfile(radio=origin_client_radio, noise_penalty_db=0.0)
+    else:
+        resolved_a = site_profiles.get(s1.site_id) if site_profiles is not None else None
+        prof_a = (
+            resolved_a
+            if resolved_a is not None
+            else SiteRadioProfile(
+                radio=active_radio,
+                noise_penalty_db=get_site_noise_penalty_db(s1.site_type),
+            )
+        )
+
+    is_dest_client = s2.site_id == destination.site_id and destination_client_radio is not None
+    if is_dest_client and destination_client_radio is not None:
+        prof_b = SiteRadioProfile(radio=destination_client_radio, noise_penalty_db=0.0)
+    else:
+        resolved_b = site_profiles.get(s2.site_id) if site_profiles is not None else None
+        prof_b = (
+            resolved_b
+            if resolved_b is not None
+            else SiteRadioProfile(
+                radio=active_radio,
+                noise_penalty_db=get_site_noise_penalty_db(s2.site_type),
+            )
+        )
+
+    leg_env_loss_db = client_env_loss_db if (is_origin_client or is_dest_client) else 0.0
+    d_km, prof = _build_leg_profile(s1, s2, elevation_fn)
+    lb_res = evaluate_point_to_point_link(
+        prof,
+        radio=prof_a.radio,
+        target_radio=prof_b.radio,
+        source_noise_penalty_db=prof_a.noise_penalty_db,
+        target_noise_penalty_db=prof_b.noise_penalty_db,
+        client_env_loss_db=leg_env_loss_db,
+        min_margin_db=min_link_margin_db,
+    )
+
+    if not lb_res.ok or lb_res.value is None:
+        failed_leg = MeshHopLeg(
+            source_site_id=s1.site_id,
+            source_name=s1.name,
+            target_site_id=s2.site_id,
+            target_name=s2.name,
+            distance_km=round(d_km, 2),
+            link_margin_db=-99.0,
+            has_line_of_sight=False,
+            forward_margin_db=-99.0,
+            reverse_margin_db=-99.0,
+            reachability_state=ReachabilityState.UNREACHABLE,
+        )
+        return failed_leg, False
+
+    lb = lb_res.value
+    raw_fwd = lb.downlink_margin_db if lb.downlink_margin_db is not None else lb.link_margin_db
+    raw_rev = lb.uplink_margin_db if lb.uplink_margin_db is not None else lb.link_margin_db
+    fwd_margin = round(raw_fwd, 2)
+    rev_margin = round(raw_rev, 2)
+    reach_state = lb.reachability_state
+    leg_margin = round(min(fwd_margin, rev_margin), 1)
+    closes_two_way = (
+        reach_state == ReachabilityState.TWO_WAY
+        and min(fwd_margin, rev_margin) >= min_link_margin_db
+    )
+
+    leg = MeshHopLeg(
+        source_site_id=s1.site_id,
+        source_name=s1.name,
+        target_site_id=s2.site_id,
+        target_name=s2.name,
+        distance_km=round(d_km, 2),
+        link_margin_db=leg_margin,
+        has_line_of_sight=lb.has_line_of_sight,
+        forward_margin_db=fwd_margin,
+        reverse_margin_db=rev_margin,
+        reachability_state=reach_state,
+    )
+    return leg, closes_two_way
 
 
 def find_optimal_mesh_route(
@@ -384,36 +509,55 @@ def find_optimal_mesh_route(
     elevation_fn: Optional[Callable[[float, float], float]] = None,
     max_hops: int = 3,
     min_link_margin_db: float = 3.0,
+    origin_client_radio: Optional[RadioConfig] = None,
+    destination_client_radio: Optional[RadioConfig] = None,
+    client_env_loss_db: float = 0.0,
+    site_profiles: Optional[Dict[str, SiteRadioProfile]] = None,
 ) -> Result[MeshRouteResult]:
     """Find the optimal multi-hop mesh packet route bridging origin and destination.
 
     Evaluates 1-hop direct, 2-hop (via single mountain/water tower repeater), and 3-hop
     paths, selecting the route that maximizes the bottleneck link fade margin.
     """
+    if client_env_loss_db < 0.0:
+        return Result.fail(
+            code="INVALID_LOSS_PENALTY",
+            message=f"client_env_loss_db must be non-negative, got {client_env_loss_db}.",
+        )
+
     active_radio = radio if radio is not None else RadioConfig()
+    is_asymmetric = not (
+        origin_client_radio is None
+        and destination_client_radio is None
+        and client_env_loss_db == 0.0
+        and site_profiles is None
+    )
 
     # 1. Direct link evaluation
-    d0, m0, los0 = _eval_hop_leg(origin, destination, active_radio, elevation_fn)
-    if m0 >= min_link_margin_db:
+    leg0, viable0 = _eval_mesh_hop_leg(
+        origin,
+        destination,
+        origin,
+        destination,
+        active_radio,
+        elevation_fn,
+        min_link_margin_db,
+        is_asymmetric,
+        origin_client_radio,
+        destination_client_radio,
+        client_env_loss_db,
+        site_profiles,
+    )
+    if viable0:
         return Result.success(
             MeshRouteResult(
                 origin_id=origin.site_id,
                 destination_id=destination.site_id,
                 route_found=True,
                 total_hops=1,
-                total_distance_km=d0,
-                bottleneck_margin_db=m0,
-                legs=[
-                    MeshHopLeg(
-                        source_site_id=origin.site_id,
-                        source_name=origin.name,
-                        target_site_id=destination.site_id,
-                        target_name=destination.name,
-                        distance_km=d0,
-                        link_margin_db=m0,
-                        has_line_of_sight=los0,
-                    )
-                ],
+                total_distance_km=leg0.distance_km,
+                bottleneck_margin_db=leg0.link_margin_db,
+                legs=[leg0],
                 intermediate_node_ids=[],
                 hop_limit_exceeded=False,
                 guidance="Direct 1-hop line-of-sight link verified.",
@@ -429,48 +573,55 @@ def find_optimal_mesh_route(
         and is_active_candidate(s)
     ]
 
-    best_2hop: Optional[Tuple[float, SiteCandidate, Tuple[float, float, bool], Tuple[float, float, bool]]] = None
+    best_2hop: Optional[Tuple[float, SiteCandidate, MeshHopLeg, MeshHopLeg]] = None
     for rep in pool:
-        d1, m1, los1 = _eval_hop_leg(origin, rep, active_radio, elevation_fn)
-        if m1 < min_link_margin_db:
+        leg1, viable1 = _eval_mesh_hop_leg(
+            origin,
+            rep,
+            origin,
+            destination,
+            active_radio,
+            elevation_fn,
+            min_link_margin_db,
+            is_asymmetric,
+            origin_client_radio,
+            destination_client_radio,
+            client_env_loss_db,
+            site_profiles,
+        )
+        if not viable1:
             continue
-        d2, m2, los2 = _eval_hop_leg(rep, destination, active_radio, elevation_fn)
-        if m2 < min_link_margin_db:
+        leg2, viable2 = _eval_mesh_hop_leg(
+            rep,
+            destination,
+            origin,
+            destination,
+            active_radio,
+            elevation_fn,
+            min_link_margin_db,
+            is_asymmetric,
+            origin_client_radio,
+            destination_client_radio,
+            client_env_loss_db,
+            site_profiles,
+        )
+        if not viable2:
             continue
-        bottleneck = min(m1, m2)
+        bottleneck = min(leg1.link_margin_db, leg2.link_margin_db)
         if best_2hop is None or bottleneck > best_2hop[0]:
-            best_2hop = (bottleneck, rep, (d1, m1, los1), (d2, m2, los2))
+            best_2hop = (bottleneck, rep, leg1, leg2)
 
     if best_2hop is not None:
-        btn, r, (d1, m1, los1), (d2, m2, los2) = best_2hop
+        btn, r, leg1, leg2 = best_2hop
         return Result.success(
             MeshRouteResult(
                 origin_id=origin.site_id,
                 destination_id=destination.site_id,
                 route_found=True,
                 total_hops=2,
-                total_distance_km=round(d1 + d2, 2),
+                total_distance_km=round(leg1.distance_km + leg2.distance_km, 2),
                 bottleneck_margin_db=btn,
-                legs=[
-                    MeshHopLeg(
-                        source_site_id=origin.site_id,
-                        source_name=origin.name,
-                        target_site_id=r.site_id,
-                        target_name=r.name,
-                        distance_km=d1,
-                        link_margin_db=m1,
-                        has_line_of_sight=los1,
-                    ),
-                    MeshHopLeg(
-                        source_site_id=r.site_id,
-                        source_name=r.name,
-                        target_site_id=destination.site_id,
-                        target_name=destination.name,
-                        distance_km=d2,
-                        link_margin_db=m2,
-                        has_line_of_sight=los2,
-                    ),
-                ],
+                legs=[leg1, leg2],
                 intermediate_node_ids=[r.site_id],
                 hop_limit_exceeded=False,
                 guidance=f"2-hop backbone bridge via {r.name} [{r.site_id}] with {btn:+.1f}dB bottleneck margin.",
@@ -479,41 +630,75 @@ def find_optimal_mesh_route(
 
     # 3. Three-hop evaluation if max_hops >= 3
     if max_hops >= 3 and len(pool) >= 2:
-        best_3hop: Optional[Tuple[float, SiteCandidate, SiteCandidate, List[Tuple[float, float, bool]]]] = None
+        best_3hop: Optional[Tuple[float, SiteCandidate, SiteCandidate, List[MeshHopLeg]]] = None
         # Evaluate top candidate pairs
         for r1 in pool[:8]:
-            d1, m1, los1 = _eval_hop_leg(origin, r1, active_radio, elevation_fn)
-            if m1 < min_link_margin_db:
+            leg1, viable1 = _eval_mesh_hop_leg(
+                origin,
+                r1,
+                origin,
+                destination,
+                active_radio,
+                elevation_fn,
+                min_link_margin_db,
+                is_asymmetric,
+                origin_client_radio,
+                destination_client_radio,
+                client_env_loss_db,
+                site_profiles,
+            )
+            if not viable1:
                 continue
             for r2 in pool[:8]:
                 if r1.site_id == r2.site_id:
                     continue
-                d2, m2, los2 = _eval_hop_leg(r1, r2, active_radio, elevation_fn)
-                if m2 < min_link_margin_db:
+                leg2, viable2 = _eval_mesh_hop_leg(
+                    r1,
+                    r2,
+                    origin,
+                    destination,
+                    active_radio,
+                    elevation_fn,
+                    min_link_margin_db,
+                    is_asymmetric,
+                    origin_client_radio,
+                    destination_client_radio,
+                    client_env_loss_db,
+                    site_profiles,
+                )
+                if not viable2:
                     continue
-                d3, m3, los3 = _eval_hop_leg(r2, destination, active_radio, elevation_fn)
-                if m3 < min_link_margin_db:
+                leg3, viable3 = _eval_mesh_hop_leg(
+                    r2,
+                    destination,
+                    origin,
+                    destination,
+                    active_radio,
+                    elevation_fn,
+                    min_link_margin_db,
+                    is_asymmetric,
+                    origin_client_radio,
+                    destination_client_radio,
+                    client_env_loss_db,
+                    site_profiles,
+                )
+                if not viable3:
                     continue
-                bottleneck = min(m1, m2, m3)
+                bottleneck = min(leg1.link_margin_db, leg2.link_margin_db, leg3.link_margin_db)
                 if best_3hop is None or bottleneck > best_3hop[0]:
-                    best_3hop = (bottleneck, r1, r2, [(d1, m1, los1), (d2, m2, los2), (d3, m3, los3)])
+                    best_3hop = (bottleneck, r1, r2, [leg1, leg2, leg3])
 
         if best_3hop is not None:
-            btn, r1, r2, legs_data = best_3hop
-            (d1, m1, los1), (d2, m2, los2), (d3, m3, los3) = legs_data
+            btn, r1, r2, legs_list = best_3hop
             return Result.success(
                 MeshRouteResult(
                     origin_id=origin.site_id,
                     destination_id=destination.site_id,
                     route_found=True,
                     total_hops=3,
-                    total_distance_km=round(d1 + d2 + d3, 2),
+                    total_distance_km=round(sum(lg.distance_km for lg in legs_list), 2),
                     bottleneck_margin_db=btn,
-                    legs=[
-                        MeshHopLeg(source_site_id=origin.site_id, source_name=origin.name, target_site_id=r1.site_id, target_name=r1.name, distance_km=d1, link_margin_db=m1, has_line_of_sight=los1),
-                        MeshHopLeg(source_site_id=r1.site_id, source_name=r1.name, target_site_id=r2.site_id, target_name=r2.name, distance_km=d2, link_margin_db=m2, has_line_of_sight=los2),
-                        MeshHopLeg(source_site_id=r2.site_id, source_name=r2.name, target_site_id=destination.site_id, target_name=destination.name, distance_km=d3, link_margin_db=m3, has_line_of_sight=los3),
-                    ],
+                    legs=legs_list,
                     intermediate_node_ids=[r1.site_id, r2.site_id],
                     hop_limit_exceeded=False,
                     guidance=f"3-hop route via {r1.name} and {r2.name} with {btn:+.1f}dB bottleneck margin.",
@@ -526,8 +711,8 @@ def find_optimal_mesh_route(
             destination_id=destination.site_id,
             route_found=False,
             total_hops=0,
-            total_distance_km=d0,
-            bottleneck_margin_db=m0,
+            total_distance_km=leg0.distance_km,
+            bottleneck_margin_db=leg0.link_margin_db,
             legs=[],
             intermediate_node_ids=[],
             hop_limit_exceeded=True,

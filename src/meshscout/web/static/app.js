@@ -34,7 +34,20 @@
     linkMode: "home",
     backhaulNodeAId: null,
     backhaulNodeBId: null,
+    backhaulPresetA: "",
+    backhaulPresetB: "",
     backhaulPickTarget: null,
+    clientPreset: "SENSECAP_T1000E",
+    clientEnv: "OUTDOOR_CLEAR",
+    viewshedDirection: "downlink",
+    clientEnvProfiles: {
+      OUTDOOR_CLEAR: { env_id: "OUTDOOR_CLEAR", label: "Outdoor Clear Sightline", clutter_loss_db: 0.0, default_agl_m: 1.5 },
+      BODY_WORN_POCKET: { env_id: "BODY_WORN_POCKET", label: "Body-Worn / Pocket Tracker", clutter_loss_db: 4.0, default_agl_m: 1.2 },
+      VEHICLE_CABIN: { env_id: "VEHICLE_CABIN", label: "Inside Vehicle Cabin", clutter_loss_db: 6.0, default_agl_m: 1.5 },
+      INDOOR_WINDOW: { env_id: "INDOOR_WINDOW", label: "Indoor Window Sill", clutter_loss_db: 8.0, default_agl_m: 2.0 },
+      ROOFTOP_MAST: { env_id: "ROOFTOP_MAST", label: "Exterior Rooftop / Eave Mast", clutter_loss_db: 0.0, default_agl_m: 6.0 },
+    },
+    hardwarePresetsCatalog: {},
     currentLink: null,
     currentRoute: null,
     homeReach: null,
@@ -100,6 +113,172 @@
       all: false,
     },
   };
+
+  // ==========================================================================
+  // TASK-1330: DUAL-MODE CLIENT VS BACKHAUL TELEMETRY & REACHABILITY HELPERS
+  // ==========================================================================
+  const REACHABILITY_BADGE_MAP = {
+    two_way: {
+      label: "TWO-WAY",
+      cssClass: "reach-badge-two-way",
+      title: "Bidirectional RF link closes in both directions (DL >= 0 dB and UL >= 0 dB)",
+    },
+    hear_only_alligator: {
+      label: "ALLIGATOR (HEAR-ONLY)",
+      cssClass: "reach-badge-alligator",
+      title: "Asymmetric Alligator link: client hears high-power tower (DL >= 0 dB) but tower cannot hear client uplink (UL < 0 dB)",
+    },
+    uplink_only: {
+      label: "UPLINK-ONLY",
+      cssClass: "reach-badge-uplink-only",
+      title: "Asymmetric link: uplink closes (UL >= 0 dB) but downlink falls below sensitivity floor (DL < 0 dB)",
+    },
+    unreachable: {
+      label: "UNREACHABLE",
+      cssClass: "reach-badge-unreachable",
+      title: "Link fails sensitivity threshold in both directions (DL < 0 dB and UL < 0 dB)",
+    },
+  };
+
+  function getReachabilityMeta(reachabilityState) {
+    if (!reachabilityState || typeof reachabilityState !== "string") {
+      return null;
+    }
+    const key = reachabilityState.trim().toLowerCase();
+    return REACHABILITY_BADGE_MAP[key] || null;
+  }
+
+  function renderReachabilityBadgeHtml(reachabilityState) {
+    const meta = getReachabilityMeta(reachabilityState);
+    if (!meta) return "";
+    return `<span class="reach-badge ${meta.cssClass}" data-reachability="${escapeHtml(reachabilityState)}" title="${escapeHtml(meta.title)}">${escapeHtml(meta.label)}</span>`;
+  }
+
+  function formatSignedDb(val) {
+    if (val == null || Number.isNaN(Number(val))) return "--";
+    const num = Number(val);
+    return `${num >= 0 ? "+" : ""}${num.toFixed(1)} dB`;
+  }
+
+  function formatBidirectionalHopMargins(item) {
+    if (!item || item.forward_margin_db == null || item.reverse_margin_db == null) {
+      return "";
+    }
+    return `FWD ${formatSignedDb(item.forward_margin_db)} / REV ${formatSignedDb(item.reverse_margin_db)}`;
+  }
+
+  function buildCompositeViewshedPayload(basePayload) {
+    const payload = { ...basePayload };
+    const direction = state.viewshedDirection || getActiveViewshedDirection() || "downlink";
+    const clientPreset = resolveClientPresetForApi();
+    const clientEnv = getActiveClientEnv();
+    const isClientEvaluationActive =
+      state.linkMode !== "backhaul" ||
+      direction !== "downlink" ||
+      Boolean(state.clientPreset) ||
+      (clientEnv && clientEnv !== "OUTDOOR_CLEAR");
+
+    if (direction !== "downlink" || isClientEvaluationActive) {
+      payload.direction = direction;
+    }
+    if (isClientEvaluationActive) {
+      if (clientPreset) {
+        payload.client_preset = clientPreset;
+      }
+      if (clientEnv) {
+        payload.client_env = clientEnv;
+      }
+    }
+    const sitePresets = {};
+    const presetA = qs("#backhaul-preset-a")?.value || state.backhaulPresetA || "";
+    const presetB = qs("#backhaul-preset-b")?.value || state.backhaulPresetB || "";
+    if (presetA && state.backhaulNodeAId) {
+      sitePresets[state.backhaulNodeAId] = presetA;
+    }
+    if (presetB && state.backhaulNodeBId) {
+      sitePresets[state.backhaulNodeBId] = presetB;
+    }
+    if (Object.keys(sitePresets).length > 0) {
+      payload.site_presets = sitePresets;
+    }
+    return payload;
+  }
+
+  function resolveClientPresetForApi() {
+    const sel = qs("#client-preset-select");
+    const raw = sel ? sel.value : state.clientPreset;
+    if (!raw) return "";
+    if (raw === "MIRROR_HEADER") {
+      return state.preferences.hardware_preset || "RAK4631_SOLAR";
+    }
+    return raw;
+  }
+
+  function getActiveClientEnv() {
+    const sel = qs("#client-env-select");
+    const raw = sel ? sel.value : state.clientEnv;
+    return raw || "OUTDOOR_CLEAR";
+  }
+
+  function getActiveViewshedDirection() {
+    const sel = qs("#viewshed-direction-select");
+    const raw = sel ? sel.value : state.viewshedDirection;
+    if (raw === "downlink" || raw === "uplink" || raw === "two_way") {
+      return raw;
+    }
+    return "downlink";
+  }
+
+  function getViewshedDirectionLabel(direction) {
+    if (direction === "uplink") return "UL CLIENT->TOWER";
+    if (direction === "two_way") return "TWO-WAY";
+    return "DL TOWER->CLIENT";
+  }
+
+  function buildViewshedCacheKey(origin) {
+    const hw = state.preferences.hardware_preset || "RAK4631_SOLAR";
+    const proto = state.preferences.protocol_profile || "MESHTASTIC_LONGFAST";
+    const season = state.preferences.season_profile || "WINTER_LEAF_OFF";
+    const direction = getActiveViewshedDirection();
+    const clientPreset = resolveClientPresetForApi() || hw;
+    const clientEnv = getActiveClientEnv();
+    return `${origin.id}_${hw}_${proto}_${season}_${direction}_${clientPreset}_${clientEnv}`;
+  }
+
+  function hydrateClientPresetsFromCatalog(presetsPayload) {
+    if (!presetsPayload || typeof presetsPayload !== "object") return;
+    if (presetsPayload.hardware_presets && typeof presetsPayload.hardware_presets === "object") {
+      state.hardwarePresetsCatalog = presetsPayload.hardware_presets;
+    }
+    const rawEnvs = presetsPayload.client_environment_profiles;
+    if (rawEnvs && typeof rawEnvs === "object") {
+      if (Array.isArray(rawEnvs)) {
+        rawEnvs.forEach((p) => {
+          if (p && p.env_id) {
+            state.clientEnvProfiles[p.env_id] = p;
+          }
+        });
+      } else {
+        Object.entries(rawEnvs).forEach(([k, v]) => {
+          if (v && typeof v === "object") {
+            state.clientEnvProfiles[v.env_id || k] = v;
+          }
+        });
+      }
+    }
+    const envSelect = qs("#client-env-select");
+    if (envSelect && state.clientEnvProfiles) {
+      Array.from(envSelect.options).forEach((opt) => {
+        const prof = state.clientEnvProfiles[opt.value];
+        if (prof && prof.label) {
+          const lossNum = Number(prof.clutter_loss_db || 0);
+          const lossTxt = lossNum > 0 ? `-${lossNum.toFixed(1)} dB` : "0.0 dB";
+          const aglTxt = prof.default_agl_m != null ? `${Number(prof.default_agl_m).toFixed(1)}m` : "";
+          opt.textContent = `${prof.label} (${lossTxt}${aglTxt ? " / " + aglTxt : ""})`;
+        }
+      });
+    }
+  }
 
   // ==========================================================================
   // TASK-1095: CIVIC INFRASTRUCTURE & TOWER CONFIGURATION
@@ -561,9 +740,28 @@
     }
 
     try {
+      const corridorPayload = {
+        site_ids: state.corridorSiteIds,
+        asymmetric: true,
+        protocol_profile: state.preferences.protocol_profile,
+        season_profile: state.preferences.season_profile,
+      };
+      const corridorSitePresets = {};
+      const presetA = qs("#backhaul-preset-a")?.value || state.backhaulPresetA || "";
+      const presetB = qs("#backhaul-preset-b")?.value || state.backhaulPresetB || "";
+      if (presetA && state.backhaulNodeAId && state.corridorSiteIds.includes(state.backhaulNodeAId)) {
+        corridorSitePresets[state.backhaulNodeAId] = presetA;
+      }
+      if (presetB && state.backhaulNodeBId && state.corridorSiteIds.includes(state.backhaulNodeBId)) {
+        corridorSitePresets[state.backhaulNodeBId] = presetB;
+      }
+      if (Object.keys(corridorSitePresets).length > 0) {
+        corridorPayload.site_presets = corridorSitePresets;
+      }
+
       const data = await apiJson("/api/backhaul/corridor", {
         method: "POST",
-        body: JSON.stringify({ site_ids: state.corridorSiteIds }),
+        body: JSON.stringify(corridorPayload),
       });
 
       if (!data || !data.corridor) {
@@ -587,8 +785,14 @@
       }
       if (bottleneckEl) {
         if (state.corridorResult.bottleneck_hop_index != null) {
+          const bnHop = Array.isArray(state.corridorResult.hops)
+            ? state.corridorResult.hops.find((h) => h.hop_index === state.corridorResult.bottleneck_hop_index)
+            : null;
           const marginStr = `${state.corridorResult.worst_link_margin_db >= 0 ? "+" : ""}${state.corridorResult.worst_link_margin_db.toFixed(1)} dB`;
-          bottleneckEl.textContent = `Hop #${state.corridorResult.bottleneck_hop_index + 1} (${marginStr})`;
+          const bnBadge = bnHop && bnHop.reachability_state
+            ? ` ${renderReachabilityBadgeHtml(bnHop.reachability_state)}`
+            : "";
+          bottleneckEl.innerHTML = `${escapeHtml(`Hop #${state.corridorResult.bottleneck_hop_index + 1} (${marginStr})`)}${bnBadge}`;
         } else {
           bottleneckEl.textContent = "--";
         }
@@ -605,7 +809,14 @@
             const losBadge = hop.has_line_of_sight
               ? `<span class="status-pill status-active">[LOS CLEAR]</span>`
               : `<span class="status-pill status-blocked">[OBSTRUCTED]</span>`;
+            const reachBadge = hop.reachability_state
+              ? ` ${renderReachabilityBadgeHtml(hop.reachability_state)}`
+              : "";
             const marginStr = `${hop.link_margin_db >= 0 ? "+" : ""}${hop.link_margin_db.toFixed(1)} dB`;
+            const bidirStr = formatBidirectionalHopMargins(hop);
+            const marginCellHtml = bidirStr
+              ? `<strong>${escapeHtml(marginStr)}</strong><div style="font-size:10px;opacity:0.85;">${escapeHtml(bidirStr)}</div>`
+              : `<strong>${escapeHtml(marginStr)}</strong>`;
             const elevStr = `${hop.elevation_delta_m >= 0 ? "+" : ""}${hop.elevation_delta_m.toFixed(0)} m`;
             const fresnelStr = `${(hop.fresnel_clearance_ratio * 100).toFixed(0)}%`;
 
@@ -616,8 +827,8 @@
                 <td><strong>${escapeHtml(hop.target_name || hop.target_site_id)}</strong></td>
                 <td>${hop.distance_km.toFixed(1)} km</td>
                 <td>${elevStr}</td>
-                <td>${losBadge}</td>
-                <td><strong>${marginStr}</strong></td>
+                <td>${losBadge}${reachBadge}</td>
+                <td>${marginCellHtml}</td>
                 <td>${fresnelStr}</td>
               </tr>
             `;
@@ -638,7 +849,14 @@
           const orig = state.sites.find((s) => s.site_id === hop.origin_site_id);
           const targ = state.sites.find((s) => s.site_id === hop.target_site_id);
           if (orig && targ) {
-            const hopColor = hop.has_line_of_sight ? "#25d085" : "#ef4444";
+            const isAlligator = hop.reachability_state === "hear_only_alligator";
+            const hopColor = !hop.has_line_of_sight
+              ? "#ef4444"
+              : (isAlligator ? "#f59e0b" : "#25d085");
+            const bidirPopup = formatBidirectionalHopMargins(hop);
+            const reachPopup = hop.reachability_state
+              ? `<br>Reachability: ${renderReachabilityBadgeHtml(hop.reachability_state)}`
+              : "";
             const line = window.L.polyline(
               [
                 [orig.lat, orig.lon],
@@ -648,9 +866,16 @@
                 color: hopColor,
                 weight: 3.5,
                 opacity: 0.9,
-                dashArray: hop.has_line_of_sight ? undefined : "6, 4",
+                dashArray: (!hop.has_line_of_sight || isAlligator) ? "6, 4" : undefined,
               }
-            ).addTo(state.leafletMap);
+            )
+              .bindPopup(
+                `<strong>Corridor Hop #${hop.hop_index + 1}: ${escapeHtml(hop.origin_site_id)} -&gt; ${escapeHtml(hop.target_site_id)}</strong><br>` +
+                `Worst Margin: ${formatSignedDb(hop.link_margin_db)}` +
+                (bidirPopup ? `<br>${escapeHtml(bidirPopup)}` : "") +
+                reachPopup
+              )
+              .addTo(state.leafletMap);
             state.leafletCorridorLines.push(line);
           }
         });
@@ -1623,11 +1848,11 @@
     if (whatifPanel) whatifPanel.classList.remove("hidden");
 
     try {
-      const payload = {
+      const payload = buildCompositeViewshedPayload({
         site_ids: state.whatIfSiteIds,
         ad_hoc_pins: activePins,
         max_range_km: 45.0,
-      };
+      });
 
       const res = await fetch("/api/viewshed/composite", {
         method: "POST",
@@ -1642,20 +1867,48 @@
 
         const area = cv.total_illuminated_area_sq_km || 0.0;
         const towns = (cv.illuminated_towns && cv.illuminated_towns.length) || 0;
-        let bhText = "--";
+        let bhHtml = "--";
         if (cv.intersite_backhaul_links && cv.intersite_backhaul_links.length > 0) {
           const links = cv.intersite_backhaul_links;
           const clearCount = links.filter((l) => l.has_line_of_sight).length;
-          if (clearCount === links.length) {
-            bhText = `Clear LOS (${links.length} link${links.length === 1 ? "" : "s"})`;
+          const losSummary = clearCount === links.length
+            ? `Clear LOS (${links.length} link${links.length === 1 ? "" : "s"})`
+            : `${clearCount}/${links.length} Clear LOS`;
+          const hasBidir = links.some((l) => l.forward_margin_db != null && l.reverse_margin_db != null);
+          const hasReach = links.some((l) => Boolean(l.reachability_state));
+
+          if (!hasBidir && !hasReach) {
+            bhHtml = escapeHtml(losSummary);
+          } else if (links.length === 1) {
+            const single = links[0];
+            const bidirStr = formatBidirectionalHopMargins(single);
+            const badge = single.reachability_state
+              ? ` ${renderReachabilityBadgeHtml(single.reachability_state)}`
+              : "";
+            bhHtml = `${escapeHtml(losSummary)}${bidirStr ? ` | ${escapeHtml(bidirStr)}` : ""}${badge}`;
           } else {
-            bhText = `${clearCount}/${links.length} Clear LOS`;
+            const worstLink = links.reduce((acc, cur) => {
+              if (!acc) return cur;
+              const accM = acc.link_margin_db != null ? acc.link_margin_db : Infinity;
+              const curM = cur.link_margin_db != null ? cur.link_margin_db : Infinity;
+              return curM < accM ? cur : acc;
+            }, null);
+            const summaryState = links.some((l) => l.reachability_state === "unreachable")
+              ? "unreachable"
+              : (links.some((l) => l.reachability_state === "hear_only_alligator")
+                ? "hear_only_alligator"
+                : (links.some((l) => l.reachability_state === "uplink_only")
+                  ? "uplink_only"
+                  : (links.every((l) => l.reachability_state === "two_way") ? "two_way" : "")));
+            const worstBidir = worstLink ? formatBidirectionalHopMargins(worstLink) : "";
+            const badge = summaryState ? ` ${renderReachabilityBadgeHtml(summaryState)}` : "";
+            bhHtml = `${escapeHtml(losSummary)}${worstBidir ? ` | Worst ${escapeHtml(worstBidir)}` : ""}${badge}`;
           }
         }
 
         if (areaEl) areaEl.textContent = `${area.toFixed(1)} km²`;
         if (townsEl) townsEl.textContent = `${towns} town${towns === 1 ? "" : "s"}`;
-        if (backhaulEl) backhaulEl.textContent = bhText;
+        if (backhaulEl) backhaulEl.innerHTML = bhHtml;
       }
     } catch (err) {
       console.warn("runWhatIfCompositeViewshed error:", err);
@@ -1672,13 +1925,14 @@
 
   async function runActiveNetworkViewshed() {
     try {
+      const payload = buildCompositeViewshedPayload({
+        include_active_nodes: true,
+        max_range_km: 45.0,
+      });
       const res = await fetch("/api/viewshed/composite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          include_active_nodes: true,
-          max_range_km: 45.0,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (res.ok) {
@@ -1749,6 +2003,14 @@
     if (state.leafletCorridorLines && state.leafletCorridorLines.length > 0) {
       state.leafletCorridorLines.forEach((l) => l.remove());
       state.leafletCorridorLines = [];
+    }
+    if (state.leafletRouteLines && state.leafletRouteLines.length > 0) {
+      state.leafletRouteLines.forEach((l) => l.remove());
+      state.leafletRouteLines = [];
+    }
+    if (state.leafletWhatIfBackhaulLines && state.leafletWhatIfBackhaulLines.length > 0) {
+      state.leafletWhatIfBackhaulLines.forEach((l) => l.remove());
+      state.leafletWhatIfBackhaulLines = [];
     }
     renderCorridorChainChips();
     const corridorCard = qs("#corridor-results-card");
@@ -2216,20 +2478,22 @@
     return { lat, lon, elev, mast, id, name, hEff, dHorizKm };
   }
 
-  // 360-Degree Radial Viewshed Cache & Fetcher (TASK-1036)
+  // 360-Degree Radial Viewshed Cache & Fetcher (TASK-1036 & TASK-1330)
   state.viewshedCache = state.viewshedCache || {};
-  let viewshedFetchInFlight = false;
+  const viewshedInFlightKeys = new Set();
 
   function fetchViewshedPolygon(origin) {
-    if (viewshedFetchInFlight) return;
     const hw = state.preferences.hardware_preset || "RAK4631_SOLAR";
     const proto = state.preferences.protocol_profile || "MESHTASTIC_LONGFAST";
     const season = state.preferences.season_profile || "WINTER_LEAF_OFF";
-    const key = `${origin.id}_${hw}_${proto}_${season}`;
+    const direction = getActiveViewshedDirection();
+    const clientPreset = resolveClientPresetForApi() || hw;
+    const clientEnv = getActiveClientEnv();
+    const key = buildViewshedCacheKey(origin);
 
-    if (state.viewshedCache[key]) return;
+    if (state.viewshedCache[key] || viewshedInFlightKeys.has(key)) return;
 
-    viewshedFetchInFlight = true;
+    viewshedInFlightKeys.add(key);
     fetch("/api/viewshed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2242,20 +2506,24 @@
         hardware_preset: hw,
         protocol_profile: proto,
         season_profile: season,
+        direction: direction,
+        client_preset: clientPreset,
+        client_env: clientEnv,
         num_radials: 48,
         max_range_km: Math.min(65, Math.max(15, origin.dHorizKm)),
       }),
     })
       .then((r) => r.json())
       .then((data) => {
-        viewshedFetchInFlight = false;
+        viewshedInFlightKeys.delete(key);
         if (data.ok && data.viewshed) {
           state.viewshedCache[key] = data.viewshed;
           renderVectorMap();
+          syncLeafletMap();
         }
       })
-      .catch((e) => {
-        viewshedFetchInFlight = false;
+      .catch(() => {
+        viewshedInFlightKeys.delete(key);
       });
   }
 
@@ -2610,13 +2878,12 @@
       }
     }
 
-    // 8b. Terrain-Conditioned Signal Quality and Viewshed Heatmap Layer (TASK-1033 & TASK-1036)
+    // 8b. Terrain-Conditioned Signal Quality and Viewshed Heatmap Layer (TASK-1033, TASK-1036 & TASK-1330)
     if (state.layerVisibility.heatmap) {
       const origin = getHeatmapOrigin();
-      const hw = state.preferences.hardware_preset || "RAK4631_SOLAR";
-      const proto = state.preferences.protocol_profile || "MESHTASTIC_LONGFAST";
-      const season = state.preferences.season_profile || "WINTER_LEAF_OFF";
-      const vsKey = `${origin.id}_${hw}_${proto}_${season}`;
+      const vsDir = getActiveViewshedDirection();
+      const vsDirTag = getViewshedDirectionLabel(vsDir);
+      const vsKey = buildViewshedCacheKey(origin);
       const vsData = state.viewshedCache ? state.viewshedCache[vsKey] : null;
 
       if (!vsData) {
@@ -2673,8 +2940,8 @@
             stroke-width="1.5"
           />
           <g class="heatmap-range-label">
-            <rect x="${(originPt.x + 8).toFixed(1)}" y="${(originPt.y - 12).toFixed(1)}" width="240" height="15" fill="oklch(0.12 0.015 155 / 0.90)" stroke="oklch(0.76 0.17 155 / 0.60)" stroke-width="0.8" rx="2" />
-            <text x="${(originPt.x + 12).toFixed(1)}" y="${(originPt.y - 1.5).toFixed(1)}" fill="oklch(0.88 0.15 155)" font-family="monospace" font-size="8.5" font-weight="700">360° VIEWSHED: ${vsData.los_area_sq_km.toFixed(0)} km² LOS | ${vsData.diffracted_area_sq_km.toFixed(0)} km² TOTAL</text>
+            <rect x="${(originPt.x + 8).toFixed(1)}" y="${(originPt.y - 12).toFixed(1)}" width="305" height="15" fill="oklch(0.12 0.015 155 / 0.90)" stroke="oklch(0.76 0.17 155 / 0.60)" stroke-width="0.8" rx="2" />
+            <text x="${(originPt.x + 12).toFixed(1)}" y="${(originPt.y - 1.5).toFixed(1)}" fill="oklch(0.88 0.15 155)" font-family="monospace" font-size="8.5" font-weight="700">VIEWSHED [${escapeHtml(vsDirTag)}]: ${vsData.los_area_sq_km.toFixed(0)} km² LOS | ${vsData.diffracted_area_sq_km.toFixed(0)} km² TOTAL</text>
           </g>
         `);
       } else {
@@ -3041,6 +3308,9 @@
             if (legSrc && legDst) {
               const pSrc = projectLatLon(legSrc.lat, legSrc.lon, W, H, false);
               const pDst = projectLatLon(legDst.lat, legDst.lon, W, H, false);
+              const legBidir = formatBidirectionalHopMargins(leg);
+              const legMeta = getReachabilityMeta(leg.reachability_state);
+              const legTitle = `${leg.source_site_id} -> ${leg.target_site_id}: ${legBidir || formatSignedDb(leg.link_margin_db)}${legMeta ? ` [${legMeta.label}]` : ""}`;
               parts.push(`
                 <line
                   x1="${pSrc.x.toFixed(1)}"
@@ -3050,7 +3320,7 @@
                   stroke="oklch(0.78 0.18 215)"
                   stroke-width="2.2"
                   stroke-dasharray="5 3"
-                />
+                ><title>${escapeHtml(legTitle)}</title></line>
               `);
             }
           });
@@ -3947,6 +4217,14 @@
       state.leafletCorridorLines.forEach((l) => l.remove());
       state.leafletCorridorLines = [];
     }
+    if (state.leafletRouteLines && state.leafletRouteLines.length > 0) {
+      state.leafletRouteLines.forEach((l) => l.remove());
+      state.leafletRouteLines = [];
+    }
+    if (state.leafletWhatIfBackhaulLines && state.leafletWhatIfBackhaulLines.length > 0) {
+      state.leafletWhatIfBackhaulLines.forEach((l) => l.remove());
+      state.leafletWhatIfBackhaulLines = [];
+    }
     if (state.leafletWhatIfLayer) {
       state.leafletWhatIfLayer.remove();
       state.leafletWhatIfLayer = null;
@@ -4184,21 +4462,23 @@
         });
       }
 
-      // Heatmap Layer on Leaflet (TASK-1033 & TASK-1036)
+      // Heatmap Layer on Leaflet (TASK-1033, TASK-1036 & TASK-1330)
       if (state.layerVisibility.heatmap) {
         const origin = getHeatmapOrigin();
-        const hw = state.preferences.hardware_preset || "RAK4631_SOLAR";
-        const proto = state.preferences.protocol_profile || "MESHTASTIC_LONGFAST";
-        const season = state.preferences.season_profile || "WINTER_LEAF_OFF";
-        const vsKey = `${origin.id}_${hw}_${proto}_${season}`;
+        const vsDir = getActiveViewshedDirection();
+        const vsKey = buildViewshedCacheKey(origin);
         const vsData = state.viewshedCache ? state.viewshedCache[vsKey] : null;
+        if (!vsData) {
+          fetchViewshedPolygon(origin);
+        }
+        const polyColor = vsDir === "uplink" ? "#06b6d4" : "#25d085";
 
         if (vsData && vsData.los_polygon) {
           state.leafletHeatmapCircle = window.L.polygon(vsData.los_polygon, {
             pane: "coveragePane",
-            color: "#25d085",
+            color: polyColor,
             weight: 2,
-            fillColor: "#25d085",
+            fillColor: polyColor,
             fillOpacity: 0.22,
             interactive: false,
           }).addTo(state.leafletMap);
@@ -4206,10 +4486,10 @@
           state.leafletHeatmapCircle = window.L.circle([origin.lat, origin.lon], {
             pane: "coveragePane",
             radius: origin.dHorizKm * 1000,
-            color: "#25d085",
+            color: polyColor,
             weight: 1.5,
             dashArray: "5, 5",
-            fillColor: "#25d085",
+            fillColor: polyColor,
             fillOpacity: 0.12,
             interactive: false,
           }).addTo(state.leafletMap);
@@ -4426,6 +4706,34 @@
           { color: "#00e5ff", weight: 2.8, dashArray: "6, 4" }
         ).addTo(state.leafletMap);
       }
+      if (state.currentRoute && state.currentRoute.route_found && Array.isArray(state.currentRoute.legs) && state.currentRoute.legs.length > 1) {
+        state.leafletRouteLines = state.leafletRouteLines || [];
+        state.currentRoute.legs.forEach((leg, idx) => {
+          const legSrc = state.sites.find((s) => s.site_id === leg.source_site_id);
+          const legDst = state.sites.find((s) => s.site_id === leg.target_site_id);
+          if (legSrc && legDst) {
+            const bidirPopup = formatBidirectionalHopMargins(leg);
+            const reachPopup = leg.reachability_state
+              ? `<br>Reachability: ${renderReachabilityBadgeHtml(leg.reachability_state)}`
+              : "";
+            const rLine = window.L.polyline(
+              [
+                [legSrc.lat, legSrc.lon],
+                [legDst.lat, legDst.lon],
+              ],
+              { color: "#38bdf8", weight: 2.6, dashArray: "5, 3" }
+            )
+              .bindPopup(
+                `<strong>Mesh Route Leg #${idx + 1}: ${escapeHtml(leg.source_site_id)} -&gt; ${escapeHtml(leg.target_site_id)}</strong><br>` +
+                `Link Margin: ${formatSignedDb(leg.link_margin_db)}` +
+                (bidirPopup ? `<br>${escapeHtml(bidirPopup)}` : "") +
+                reachPopup
+              )
+              .addTo(state.leafletMap);
+            state.leafletRouteLines.push(rLine);
+          }
+        });
+      }
     } else {
       const sel = state.sites.find((s) => s.site_id === state.selectedSiteId);
       if (sel) {
@@ -4445,7 +4753,14 @@
         const orig = state.sites.find((s) => s.site_id === hop.origin_site_id);
         const targ = state.sites.find((s) => s.site_id === hop.target_site_id);
         if (orig && targ) {
-          const hopColor = hop.has_line_of_sight ? "#25d085" : "#ef4444";
+          const isAlligator = hop.reachability_state === "hear_only_alligator";
+          const hopColor = !hop.has_line_of_sight
+            ? "#ef4444"
+            : (isAlligator ? "#f59e0b" : "#25d085");
+          const bidirPopup = formatBidirectionalHopMargins(hop);
+          const reachPopup = hop.reachability_state
+            ? `<br>Reachability: ${renderReachabilityBadgeHtml(hop.reachability_state)}`
+            : "";
           const line = window.L.polyline(
             [
               [orig.lat, orig.lon],
@@ -4455,9 +4770,16 @@
               color: hopColor,
               weight: 3.5,
               opacity: 0.9,
-              dashArray: hop.has_line_of_sight ? undefined : "6, 4",
+              dashArray: (!hop.has_line_of_sight || isAlligator) ? "6, 4" : undefined,
             }
-          ).addTo(state.leafletMap);
+          )
+            .bindPopup(
+              `<strong>Corridor Hop #${hop.hop_index + 1}: ${escapeHtml(hop.origin_site_id)} -&gt; ${escapeHtml(hop.target_site_id)}</strong><br>` +
+              `Worst Margin: ${formatSignedDb(hop.link_margin_db)}` +
+              (bidirPopup ? `<br>${escapeHtml(bidirPopup)}` : "") +
+              reachPopup
+            )
+            .addTo(state.leafletMap);
           state.leafletCorridorLines.push(line);
         }
       });
@@ -4548,25 +4870,34 @@
           return null;
         };
 
+        state.leafletWhatIfBackhaulLines = state.leafletWhatIfBackhaulLines || [];
         cv.intersite_backhaul_links.forEach((link) => {
           const posA = findCoord(link.site_a_id);
           const posB = findCoord(link.site_b_id);
           if (posA && posB) {
+            const isAlligator = link.reachability_state === "hear_only_alligator";
+            const linkColor = !link.has_line_of_sight
+              ? "#ef4444"
+              : (isAlligator ? "#f59e0b" : "#25d085");
+            const bidirPopup = formatBidirectionalHopMargins(link);
+            const reachPopup = link.reachability_state
+              ? `<br>Reachability: ${renderReachabilityBadgeHtml(link.reachability_state)}`
+              : "";
             const polyline = window.L.polyline(
               [[posA.lat, posA.lon], [posB.lat, posB.lon]],
               {
-                color: link.has_line_of_sight ? "#25d085" : "#ef4444",
+                color: linkColor,
                 weight: link.has_line_of_sight ? 2.5 : 2,
-                dashArray: link.has_line_of_sight ? null : "4, 4",
+                dashArray: (!link.has_line_of_sight || isAlligator) ? "4, 4" : null,
               }
             ).bindPopup(`
-              <strong>Backhaul Link: ${escapeHtml(link.site_a_id)} ↔ ${escapeHtml(link.site_b_id)}</strong><br>
+              <strong>Backhaul Link: ${escapeHtml(link.site_a_id)} &lt;-&gt; ${escapeHtml(link.site_b_id)}</strong><br>
               Status: ${link.has_line_of_sight ? '<span style="color:#25d085;font-weight:700;">Clear LOS</span>' : '<span style="color:#ef4444;font-weight:700;">Obstructed</span>'}<br>
               Distance: ${formatDist(link.distance_km)}<br>
-              Link Margin: ${link.link_margin_db != null ? link.link_margin_db.toFixed(1) : "--"} dB
+              Link Margin: ${link.link_margin_db != null ? link.link_margin_db.toFixed(1) : "--"} dB${bidirPopup ? `<br>${escapeHtml(bidirPopup)}` : ""}${reachPopup}
             `);
             polyline.addTo(state.leafletMap);
-            state.leafletPinMarkers.push(polyline);
+            state.leafletWhatIfBackhaulLines.push(polyline);
           }
         });
       }
@@ -4777,8 +5108,14 @@
       const fsplEl = qs("#tel-fspl"); if (fsplEl) fsplEl.textContent = "--";
       const diffEl = qs("#tel-diff"); if (diffEl) diffEl.textContent = "--";
       const rxEl = qs("#tel-rx"); if (rxEl) rxEl.textContent = "--";
-      const marginEl = qs("#tel-margin"); if (marginEl) { marginEl.textContent = "--"; marginEl.className = "telemetry-value"; }
-      const clearEl = qs("#tel-fresnel-clear"); if (clearEl) { clearEl.textContent = "--"; clearEl.className = "telemetry-value"; }
+      const marginEl = qs("#tel-margin"); if (marginEl) { marginEl.textContent = "--"; marginEl.className = "tel-val"; }
+      const dirMarginsEl = qs("#tel-dir-margins"); if (dirMarginsEl) { dirMarginsEl.textContent = "--"; dirMarginsEl.removeAttribute("title"); }
+      const reachEl = qs("#tel-reachability"); if (reachEl) reachEl.textContent = "--";
+      const clearEl = qs("#tel-fresnel-clear"); if (clearEl) { clearEl.textContent = "--"; clearEl.className = "tel-val"; }
+      const fresnelReachBadge = qs("#fresnel-reachability-badge");
+      if (fresnelReachBadge) {
+        fresnelReachBadge.style.display = "none";
+      }
       const dynamicBadge = qs("#fresnel-dynamic-badge");
       if (dynamicBadge) {
         dynamicBadge.textContent = "60% FRESNEL CLEAR";
@@ -4807,6 +5144,65 @@
     qs("#tel-diff").textContent = `${lb.diffraction_loss_db.toFixed(1)} dB`;
     qs("#tel-rx").textContent = `${lb.rx_power_dbm.toFixed(1)} dBm`;
     qs("#tel-margin").textContent = `${lb.link_margin_db >= 0 ? "+" : ""}${lb.link_margin_db.toFixed(1)} dB`;
+
+    // Directional margins & reachability badge (TASK-1330)
+    const dirLabelEl = qs("#tel-dir-margins-label");
+    const dirValEl = qs("#tel-dir-margins");
+    const hasDirMargins = lb && (lb.downlink_margin_db != null || lb.uplink_margin_db != null);
+    if (state.linkMode === "backhaul") {
+      if (dirLabelEl) dirLabelEl.textContent = "A -> B / B -> A";
+      if (dirValEl) {
+        if (hasDirMargins) {
+          const abStr = formatSignedDb(lb.downlink_margin_db);
+          const baStr = formatSignedDb(lb.uplink_margin_db);
+          dirValEl.textContent = `A -> B ${abStr} | B -> A ${baStr}`;
+          const asymTxt = lb.asymmetry_delta_db != null && !Number.isNaN(Number(lb.asymmetry_delta_db))
+            ? ` | Asymmetry Delta: ${Number(lb.asymmetry_delta_db).toFixed(1)} dB`
+            : "";
+          dirValEl.title = `Site A -> Site B: ${abStr} | Site B -> Site A: ${baStr}${asymTxt}`;
+        } else {
+          dirValEl.textContent = "--";
+          dirValEl.removeAttribute("title");
+        }
+      }
+    } else {
+      if (dirLabelEl) dirLabelEl.textContent = "DL / UL Margin";
+      if (dirValEl) {
+        if (hasDirMargins) {
+          const dlStr = formatSignedDb(lb.downlink_margin_db);
+          const ulStr = formatSignedDb(lb.uplink_margin_db);
+          dirValEl.textContent = `DL ${dlStr} | UL ${ulStr}`;
+          const asymTxt = lb.asymmetry_delta_db != null && !Number.isNaN(Number(lb.asymmetry_delta_db))
+            ? ` | Asymmetry Delta: ${Number(lb.asymmetry_delta_db).toFixed(1)} dB`
+            : "";
+          dirValEl.title = `Downlink (Tower -> Client): ${dlStr} | Uplink (Client -> Tower): ${ulStr}${asymTxt}`;
+        } else {
+          dirValEl.textContent = "--";
+          dirValEl.removeAttribute("title");
+        }
+      }
+    }
+
+    const reachMeta = lb ? getReachabilityMeta(lb.reachability_state) : null;
+    const reachEl = qs("#tel-reachability");
+    if (reachEl) {
+      if (reachMeta) {
+        reachEl.innerHTML = renderReachabilityBadgeHtml(lb.reachability_state);
+      } else {
+        reachEl.textContent = "--";
+      }
+    }
+    const fresnelReachBadge = qs("#fresnel-reachability-badge");
+    if (fresnelReachBadge) {
+      if (reachMeta) {
+        fresnelReachBadge.textContent = reachMeta.label;
+        fresnelReachBadge.className = `telemetry-badge reach-badge ${reachMeta.cssClass}`;
+        fresnelReachBadge.title = reachMeta.title;
+        fresnelReachBadge.style.display = "inline-block";
+      } else {
+        fresnelReachBadge.style.display = "none";
+      }
+    }
 
     const clearEl = qs("#tel-fresnel-clear");
     if (fa.fresnel_60pct_clear) {
@@ -5132,7 +5528,12 @@
     const topTower = rep.ranked_towers && rep.ranked_towers.length ? rep.ranked_towers[0] : null;
     if (topTower && rep.best_azimuth_deg != null) {
       qs("#compass-headline").textContent = `POINT ANTENNA: ${rep.best_azimuth_deg.toFixed(0)}° ${rep.best_cardinal_direction} → ${topTower.name}`;
-      qs("#compass-subline").textContent = `Dist: ${formatDist(topTower.distance_km)} | Margin: +${topTower.link_margin_db.toFixed(1)} dB | RX: ${topTower.rx_power_dbm.toFixed(1)} dBm`;
+      const topReach = getReachabilityMeta(topTower.reachability_state);
+      const hasTopDir = topTower.downlink_margin_db != null || topTower.uplink_margin_db != null;
+      const marginSummary = hasTopDir
+        ? `DL ${formatSignedDb(topTower.downlink_margin_db)} / UL ${formatSignedDb(topTower.uplink_margin_db)}`
+        : `Margin: ${formatSignedDb(topTower.link_margin_db)}`;
+      qs("#compass-subline").textContent = `Dist: ${formatDist(topTower.distance_km)} | ${marginSummary}${topReach ? " | " + topReach.label : ""} | RX: ${topTower.rx_power_dbm.toFixed(1)} dBm`;
       const needle = qs("#compass-needle-group");
       if (needle) {
         needle.setAttribute("transform", `rotate(${rep.best_azimuth_deg} 40 40)`);
@@ -5154,18 +5555,25 @@
             : t.link_margin_db >= 0
             ? "color:oklch(0.80 0.16 80)"
             : "color:oklch(0.68 0.19 25)";
+        const reachBadgeHtml = renderReachabilityBadgeHtml(t.reachability_state);
+        const hasDir = t.downlink_margin_db != null || t.uplink_margin_db != null;
+        const dirMarginsHtml = hasDir
+          ? `<div class="dir-margin-pair"><span title="Downlink (Tower -> Client)">DL ${formatSignedDb(t.downlink_margin_db)}</span><span class="dir-sep">/</span><span title="Uplink (Client -> Tower)">UL ${formatSignedDb(t.uplink_margin_db)}</span></div>`
+          : "";
         return `
           <tr class="${isSel ? "selected-row" : ""}" data-site-id="${escapeHtml(t.site_id)}">
             <td>#${t.recommended_rank}</td>
             <td>
               <strong>${escapeHtml(t.name)}</strong><br/>
               <span class="status-pill status-${escapeHtml(t.status)}">${escapeHtml(t.status)}</span>
+              ${reachBadgeHtml}
               <small style="color:var(--text-muted)">${escapeHtml(t.site_id)}</small>
             </td>
             <td>${t.azimuth_deg.toFixed(0)}° ${escapeHtml(t.cardinal_direction)}</td>
             <td>${formatDist(t.distance_km)}</td>
             <td style="${marginClass};font-weight:700;">
-              ${t.link_margin_db >= 0 ? "+" : ""}${t.link_margin_db.toFixed(1)} dB
+              ${formatSignedDb(t.link_margin_db)}
+              ${dirMarginsHtml}
             </td>
             <td>
               <div class="table-actions-cell">
@@ -5484,18 +5892,28 @@
     }
 
     try {
+      const backhaulPayload = {
+        evaluation_mode: "backhaul",
+        source_site_id: state.backhaulNodeAId,
+        target_site_id: state.backhaulNodeBId,
+        source_mast_m: state.originMastHeight,
+        target_mast_m: state.targetMastHeight,
+        hardware_preset: state.preferences.hardware_preset,
+        protocol_profile: state.preferences.protocol_profile,
+        season_profile: state.preferences.season_profile,
+      };
+      const srcPreset = qs("#backhaul-preset-a")?.value || state.backhaulPresetA || "";
+      const tgtPreset = qs("#backhaul-preset-b")?.value || state.backhaulPresetB || "";
+      if (srcPreset) {
+        backhaulPayload.source_preset = srcPreset;
+      }
+      if (tgtPreset) {
+        backhaulPayload.target_preset = tgtPreset;
+      }
       // Dynamic link evaluation: /api/link, /api/links/evaluate, /api/links/evaluate-sites
       const data = await apiJson("/api/link", {
         method: "POST",
-        body: JSON.stringify({
-          source_site_id: state.backhaulNodeAId,
-          target_site_id: state.backhaulNodeBId,
-          source_mast_m: state.originMastHeight,
-          target_mast_m: state.targetMastHeight,
-          hardware_preset: state.preferences.hardware_preset,
-          protocol_profile: state.preferences.protocol_profile,
-          season_profile: state.preferences.season_profile,
-        }),
+        body: JSON.stringify(backhaulPayload),
       });
       state.currentLink = data;
       state.currentRoute = null;
@@ -5504,8 +5922,13 @@
       renderFresnelChart(data);
       renderVectorMap();
       syncLeafletMap();
-      // Auto-trace multi-hop route if direct link has negative margin
-      if (data && data.link_budget && data.link_budget.link_margin_db < 0) {
+      // Auto-trace multi-hop route if direct link fails closure in either direction
+      if (
+        data &&
+        data.link_budget &&
+        (data.link_budget.link_margin_db < 0 ||
+          (data.link_budget.reachability_state && data.link_budget.reachability_state !== "two_way"))
+      ) {
         await traceMeshRoute();
       }
       await fetchAdvisorBackhaul(state.backhaulNodeAId, state.backhaulNodeBId);
@@ -5525,24 +5948,68 @@
     }
 
     try {
+      const routePayload = {
+        origin_site_id: state.backhaulNodeAId,
+        destination_site_id: state.backhaulNodeBId,
+        max_hops: 3,
+        min_link_margin_db: 0.0,
+        hardware_preset: state.preferences.hardware_preset,
+        protocol_profile: state.preferences.protocol_profile,
+        season_profile: state.preferences.season_profile,
+      };
+      const routeSitePresets = {};
+      const srcPreset = qs("#backhaul-preset-a")?.value || state.backhaulPresetA || "";
+      const tgtPreset = qs("#backhaul-preset-b")?.value || state.backhaulPresetB || "";
+      if (srcPreset) routeSitePresets[state.backhaulNodeAId] = srcPreset;
+      if (tgtPreset) routeSitePresets[state.backhaulNodeBId] = tgtPreset;
+      routePayload.site_presets = routeSitePresets;
+
+      if (state.linkMode === "home") {
+        const clientPreset = resolveClientPresetForApi();
+        const clientEnv = getActiveClientEnv();
+        if (clientPreset) routePayload.origin_client_preset = clientPreset;
+        if (clientEnv) routePayload.client_env = clientEnv;
+      }
+
       const data = await apiJson("/api/mesh/route", {
         method: "POST",
-        body: JSON.stringify({
-          origin_site_id: state.backhaulNodeAId,
-          destination_site_id: state.backhaulNodeBId,
-          max_hops: 3,
-          min_link_margin_db: 0.0,
-        }),
+        body: JSON.stringify(routePayload),
       });
       if (data && data.ok && data.route) {
         state.currentRoute = data.route;
         if (telemEl) {
           const r = data.route;
           if (r.route_found) {
-            telemEl.textContent = `${r.total_hops} HOP${r.total_hops > 1 ? "S" : ""} (${r.bottleneck_margin_db >= 0 ? "+" : ""}${r.bottleneck_margin_db.toFixed(1)} dB)`;
+            const legs = Array.isArray(r.legs) ? r.legs : [];
+            const baseLabel = `${r.total_hops} HOP${r.total_hops > 1 ? "S" : ""} (${formatSignedDb(r.bottleneck_margin_db)})`;
+            const worstLeg = legs.reduce((acc, cur) => {
+              if (!acc) return cur;
+              const accM = acc.link_margin_db != null ? acc.link_margin_db : Infinity;
+              const curM = cur.link_margin_db != null ? cur.link_margin_db : Infinity;
+              return curM < accM ? cur : acc;
+            }, null);
+            const routeReach = legs.some((l) => l.reachability_state === "unreachable")
+              ? "unreachable"
+              : (legs.some((l) => l.reachability_state === "hear_only_alligator")
+                ? "hear_only_alligator"
+                : (legs.some((l) => l.reachability_state === "uplink_only")
+                  ? "uplink_only"
+                  : (legs.length > 0 && legs.every((l) => l.reachability_state === "two_way") ? "two_way" : "")));
+            const bidirSummary = worstLeg ? formatBidirectionalHopMargins(worstLeg) : "";
+            const reachBadge = routeReach ? ` ${renderReachabilityBadgeHtml(routeReach)}` : "";
+            const legTooltips = legs
+              .map((leg, idx) => {
+                const bidir = formatBidirectionalHopMargins(leg);
+                const meta = getReachabilityMeta(leg.reachability_state);
+                return `Leg #${idx + 1} ${leg.source_site_id} -> ${leg.target_site_id}: ${bidir || formatSignedDb(leg.link_margin_db)}${meta ? ` [${meta.label}]` : ""}`;
+              })
+              .join(" | ");
+            telemEl.innerHTML = `${escapeHtml(baseLabel)}${bidirSummary ? ` <span style="font-size:10px;opacity:0.9;">[${escapeHtml(bidirSummary)}]</span>` : ""}${reachBadge}`;
+            telemEl.title = legTooltips;
             telemEl.className = "telemetry-badge " + (r.bottleneck_margin_db >= 6 ? "margin-positive" : (r.bottleneck_margin_db >= 0 ? "margin-marginal" : "margin-negative"));
           } else {
             telemEl.textContent = "NO ROUTE (LIMIT EXCEEDED)";
+            telemEl.title = "";
             telemEl.className = "telemetry-badge margin-negative";
           }
         }
@@ -5702,6 +6169,14 @@
       protocol_profile: state.preferences.protocol_profile,
       season_profile: state.preferences.season_profile,
     };
+    if (state.linkMode === "home") {
+      const resolvedClientPreset = resolveClientPresetForApi();
+      Object.assign(linkPayload, {
+        evaluation_mode: "client",
+        client_preset: resolvedClientPreset || state.preferences.hardware_preset,
+        client_env: getActiveClientEnv(),
+      });
+    }
     if (state.preferences && state.preferences.home_lat != null && state.preferences.home_lon != null) {
       linkPayload.home_lat = state.preferences.home_lat;
       linkPayload.home_lon = state.preferences.home_lon;
@@ -5732,6 +6207,11 @@
       season_profile: state.preferences.season_profile,
       persist_height: persistHeight,
     };
+    const resolvedClientPreset = resolveClientPresetForApi();
+    if (resolvedClientPreset) {
+      homePayload.client_preset = resolvedClientPreset;
+      homePayload.client_env = getActiveClientEnv();
+    }
     if (state.preferences && state.preferences.home_lat != null && state.preferences.home_lon != null) {
       homePayload.home_lat = state.preferences.home_lat;
       homePayload.home_lon = state.preferences.home_lon;
@@ -8146,14 +8626,19 @@
 
   async function bootstrapWorkbench() {
     try {
-      const [stateResp, sitesResp, layersResp, minimapResp, regionsResp, statusResp] = await Promise.allSettled([
+      const [stateResp, sitesResp, layersResp, minimapResp, regionsResp, statusResp, presetsResp] = await Promise.allSettled([
         apiJson("/api/state"),
         apiJson("/api/sites"),
         fetchMapLayers(),
         apiJson("/api/map/minimap"),
         apiJson("/api/regions"),
         apiJson("/api/status"),
+        apiJson("/api/presets"),
       ]);
+
+      if (presetsResp.status === "fulfilled" && presetsResp.value) {
+        hydrateClientPresetsFromCatalog(presetsResp.value);
+      }
 
       if (statusResp.status === "fulfilled" && statusResp.value) {
         if (statusResp.value.version) {
@@ -8405,17 +8890,95 @@
       });
     });
 
-    // 2b. Link Mode Switcher & Backhaul Controls (TASK-1032)
+    // 2b. Link Mode Switcher & Backhaul Controls (TASK-1032 & TASK-1330)
     qs("#mode-home-btn")?.addEventListener("click", () => setLinkMode("home"));
     qs("#mode-backhaul-btn")?.addEventListener("click", () => setLinkMode("backhaul"));
     qs("#backhaul-swap-btn")?.addEventListener("click", async () => {
       const tmp = state.backhaulNodeAId;
       state.backhaulNodeAId = state.backhaulNodeBId;
       state.backhaulNodeBId = tmp;
+      const tmpPreset = state.backhaulPresetA;
+      state.backhaulPresetA = state.backhaulPresetB;
+      state.backhaulPresetB = tmpPreset;
+      const selA = qs("#backhaul-preset-a");
+      const selB = qs("#backhaul-preset-b");
+      if (selA) selA.value = state.backhaulPresetA || "";
+      if (selB) selB.value = state.backhaulPresetB || "";
       syncBackhaulDropdowns();
       if (state.backhaulNodeAId && state.backhaulNodeBId) {
         await evaluateBackhaulLink(true);
       }
+    });
+    qs("#backhaul-preset-a")?.addEventListener("change", async (e) => {
+      state.backhaulPresetA = e.target.value || "";
+      if (state.linkMode === "backhaul" && state.backhaulNodeAId && state.backhaulNodeBId) {
+        await evaluateBackhaulLink(false);
+      }
+    });
+    qs("#backhaul-preset-b")?.addEventListener("change", async (e) => {
+      state.backhaulPresetB = e.target.value || "";
+      if (state.linkMode === "backhaul" && state.backhaulNodeAId && state.backhaulNodeBId) {
+        await evaluateBackhaulLink(false);
+      }
+    });
+    qs("#client-preset-select")?.addEventListener("change", async (e) => {
+      state.clientPreset = e.target.value || "";
+      await refreshHomeCheck(false);
+      if (state.whatIfSiteIds.length > 0 || state.adHocPins.some((p) => p.include_whatif !== false)) {
+        await runWhatIfCompositeViewshed();
+      }
+      if (state.showActiveCoverage) {
+        await runActiveNetworkViewshed();
+      }
+      if (state.linkMode === "home" && state.selectedSiteId) {
+        await selectSiteAndInspectLink(state.selectedSiteId, false);
+      } else {
+        renderVectorMap();
+        syncLeafletMap();
+      }
+    });
+    qs("#client-env-select")?.addEventListener("change", async (e) => {
+      state.clientEnv = e.target.value || "OUTDOOR_CLEAR";
+      const prof = state.clientEnvProfiles && state.clientEnvProfiles[state.clientEnv];
+      if (prof && prof.default_agl_m != null) {
+        const defaultAgl = Number(prof.default_agl_m);
+        const aglSlider = qs("#home-agl-slider");
+        const aglReadout = qs("#home-agl-readout");
+        if (aglSlider) aglSlider.value = String(defaultAgl);
+        if (aglReadout) aglReadout.textContent = `${defaultAgl.toFixed(1)} m`;
+        state.preferences.home_height_agl_m = defaultAgl;
+        if (state.linkMode === "home") {
+          state.originMastHeight = defaultAgl;
+          const originSlider = qs("#origin-mast-slider");
+          const originVal = qs("#origin-mast-val");
+          if (originSlider) originSlider.value = String(Math.max(3, Math.round(defaultAgl)));
+          if (originVal) originVal.textContent = `${defaultAgl.toFixed(1)}m`;
+        }
+      }
+      await refreshHomeCheck(false);
+      if (state.whatIfSiteIds.length > 0 || state.adHocPins.some((p) => p.include_whatif !== false)) {
+        await runWhatIfCompositeViewshed();
+      }
+      if (state.showActiveCoverage) {
+        await runActiveNetworkViewshed();
+      }
+      if (state.linkMode === "home" && state.selectedSiteId) {
+        await selectSiteAndInspectLink(state.selectedSiteId, false);
+      } else {
+        renderVectorMap();
+        syncLeafletMap();
+      }
+    });
+    qs("#viewshed-direction-select")?.addEventListener("change", async (e) => {
+      state.viewshedDirection = e.target.value || "downlink";
+      if (state.whatIfSiteIds.length > 0 || state.adHocPins.some((p) => p.include_whatif !== false)) {
+        await runWhatIfCompositeViewshed();
+      }
+      if (state.showActiveCoverage) {
+        await runActiveNetworkViewshed();
+      }
+      renderVectorMap();
+      syncLeafletMap();
     });
     qs("#backhaul-pick-a-btn")?.addEventListener("click", () => {
       if (state.linkMode !== "backhaul") {
