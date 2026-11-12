@@ -92,7 +92,7 @@ def main():
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     svg_file = assets_dir / "meshscout-logo.svg"
-    svg_file.write_text(SVG_SOURCE, encoding="utf-8")
+    svg_file.write_text(SVG_SOURCE, encoding="utf-8", newline="\n")
 
     html_file = assets_dir / "render_avatar.html"
     html_content = f"""<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;width:1024px;height:1024px;background:transparent;">{SVG_SOURCE}</body></html>"""

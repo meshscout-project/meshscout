@@ -15,20 +15,8 @@
   "timestamp": "2026-11-09T17:15:59.691613+00:00",
   "files": {
     "meshscout-avatar.png": "f6ffa98bc681dd7a0176f49bff9aeed5d35820bb5a4143b9c3add6b32fd1be59",
-    "meshscout-logo.svg": "d3da97ed3d600b902e8e08aa6e7066f542bb6c4fdf0bfca7f2e3e5871aa968e8",
-    "meshscout-workbench.png": "95cd359abc2dea05a24513743c9384bee5c40957c189fd729ec6586b7139c695",
-    "render_avatar.html": "8ba96a2430f2d39000994c98ca3474de029f774fc1040a529cc2b323bf5e5d77",
-    "candidates/option_a_usgs_field_topo.html": "6ce2db16781a9d96d0c3c987d317b47b229ff037cb4f50129edc296026fe0f4f",
-    "candidates/option_a_usgs_field_topo.png": "bbbdca4fe92822a3ee32d4b7d9f2db1e7183c24d2790633a8117870b7309f0f7",
-    "candidates/option_a_usgs_field_topo.svg": "6f469ca7ee64486c0f163328c7d110947b397624d89b8e71d36b72297b647d0a",
-    "candidates/option_b_swiss_modernist.html": "1c485fd4f0d521220e4cdc96cd35be2f8274db9abdf8c61b454c81c98b464880",
-    "candidates/option_b_swiss_modernist.png": "9933e8609ae0d5c9c0247d3cd2598290f0ca21a179adab2fbacc4ae8c5207790",
-    "candidates/option_b_swiss_modernist.svg": "52c536bff336c0e6fe69188f03a5826bff18537744e019b3f9e1feef1f5fbc88",
-    "candidates/option_c_tactical_avionics.html": "dec1e74e6d1329ef8ce2d8e6863ef8d6d5754be56b8f48a516fc602c30e2cd8b",
-    "candidates/option_c_tactical_avionics.png": "51c2718e2c8d8898dd14cafdda8a9abffc3a6be4cf5d358d0f67b9d60536ee26",
-    "candidates/option_c_tactical_avionics.svg": "7459294d342d80c5212fc6ba8910685a5e8eb1912c137ea3647e70e41d94cad5",
-    "candidates/option_d_nordic_granite.html": "d9b4ff6c387f10d2be77fc900844eb8addd61a07e86d6d48ffcad070964cfc31",
-    "candidates/option_d_nordic_granite.png": "3143ca6f2968af6bebc7476dba627120e52a03e8ab91fb321dd10bcf09a36e13",
-    "candidates/option_d_nordic_granite.svg": "8fbbfa92b96d6a221bbad42913067905b5a923ed2a86a70ec8f3e99d1f7ad707"
+    "meshscout-logo.svg": "c32b7773c33948a89b4653fe2b447d3ba8173682f0ab73a13631944d7cd0bece",
+    "meshscout-social-preview.png": "351adbe40d05d2cffead4b5da63d1ed0408846fe53d0fb93af381d2287484bd1",
+    "meshscout-workbench.png": "95cd359abc2dea05a24513743c9384bee5c40957c189fd729ec6586b7139c695"
   }
 }
