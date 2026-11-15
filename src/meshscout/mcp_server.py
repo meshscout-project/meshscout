@@ -109,6 +109,10 @@ from meshscout.core.viewshed import (
     compute_viewshed,
     generate_target_grid,
 )
+from meshscout.mcp_tool_helpers import (
+    advise_eirp as advise_eirp,
+    list_region_packs as list_region_packs,
+)
 from meshscout.reporting import generate_landowner_pitch_html
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent.parent / "fixtures"
@@ -1553,81 +1557,6 @@ def manage_living_mesh_state(
                 ),
             },
         }
-
-
-def advise_eirp(
-    tx_power_dbm: float,
-    antenna_gain_dbi: float,
-    cable_loss_db: float = 0.0,
-    frequency_mhz: float = 915.0,
-    domain: Optional[str] = None,
-    region: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Evaluate transmitter conducted power and EIRP limits against FCC Part 15.247 / ISED RSS-247 rules."""
-    from meshscout.core.regulatory import (
-        RegulatoryDomain,
-        advise_eirp as core_advise_eirp,
-        detect_regulatory_domain,
-    )
-
-    reg_domain = RegulatoryDomain.US_FCC_PART15
-    if domain:
-        try:
-            reg_domain = RegulatoryDomain(domain)
-        except ValueError:
-            reg_domain = detect_regulatory_domain(domain)
-    elif region:
-        reg_domain = detect_regulatory_domain(region)
-
-    report = core_advise_eirp(
-        tx_power_dbm=float(tx_power_dbm),
-        antenna_gain_dbi=float(antenna_gain_dbi),
-        cable_loss_db=float(cable_loss_db),
-        frequency_mhz=float(frequency_mhz),
-        domain=reg_domain,
-    )
-    res = report.model_dump(mode="json")
-    res["ok"] = True
-    return res
-
-
-def list_region_packs(
-    db_path: Optional[str] = None,
-    include_available: bool = False,
-) -> Dict[str, Any]:
-    """List installed and available regional tower data packs with provenance and licensing metadata."""
-    from meshscout.core.packs import list_installed_packs as core_list_installed_packs
-    from meshscout.core.tower_registry import UnifiedTowerRegistry
-    from meshscout.adapters.pack_client import PackClient
-
-    with UnifiedTowerRegistry(db_path=db_path) as reg:
-        installed = core_list_installed_packs(reg)
-
-    available = []
-    manifest_error = None
-    if include_available:
-        try:
-            client = PackClient()
-            avail_res = client.list_available_packs()
-            if avail_res.ok and avail_res.value is not None:
-                available = [p.model_dump(mode="json") for p in avail_res.value]
-            else:
-                manifest_error = avail_res.error.message if avail_res.error else "Failed to retrieve manifest"
-        except Exception as exc:
-            manifest_error = str(exc)
-
-    return {
-        "ok": True,
-        "installed": installed,
-        "installed_count": len(installed),
-        "available": available,
-        "manifest_error": manifest_error,
-        "attributions": {
-            "fcc_asr": "FCC Antenna Structure Registration (Public Domain)",
-            "ised_sms": "ISED TAFL (Open Government Licence - Canada 2.0)",
-            "civic_osm": "© OpenStreetMap contributors (ODbL 1.0)",
-        },
-    }
 
 
 MCP_TOOLS_MANIFEST: List[Dict[str, Any]] = [

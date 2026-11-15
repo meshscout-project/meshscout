@@ -186,6 +186,7 @@ from meshscout.mcp_server import (
     _synthetic_vermont_elevation_fn,
     load_regional_fixtures,
 )
+from meshscout.web.regulatory_routes import build_regulatory_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -4727,67 +4728,7 @@ def create_web_app(
             "removed_rows": removed,
         }
 
-    @app.get("/api/v1/attribution")
-    def get_attribution_endpoint() -> Dict[str, Any]:
-        """Return dataset licensing and attribution metadata from sources.json."""
-        from meshscout.adapters.source_fetch import load_source_catalog
-
-        sources = load_source_catalog()
-        return {
-            "ok": True,
-            "sources": sources,
-            "count": len(sources),
-        }
-
-    @app.get("/api/v1/regions/north-america")
-    def get_north_america_regions_endpoint(
-        country: Optional[str] = Query(default=None, description="Optional country filter ('US' or 'CA')"),
-    ) -> Dict[str, Any]:
-        """List regional states, provinces, and territories across North America."""
-        from meshscout.adapters.regions import list_north_america_regions
-
-        regions = list_north_america_regions(country=country)
-        return {
-            "ok": True,
-            "count": len(regions),
-            "regions": regions,
-        }
-
-    @app.get("/api/v1/regulatory/eirp")
-    def get_regulatory_eirp_endpoint(
-        tx_power_dbm: float = Query(default=20.0, description="Transmitter conducted power in dBm"),
-        antenna_gain_dbi: float = Query(default=3.0, description="Antenna gain in dBi"),
-        cable_loss_db: float = Query(default=0.0, description="Cable/connector loss in dB"),
-        frequency_mhz: float = Query(default=915.0, description="Operating frequency in MHz"),
-        domain: Optional[str] = Query(default=None, description="Regulatory domain (US_FCC_PART15 or CA_ISED_RSS247)"),
-        region: Optional[str] = Query(default=None, description="Region code (e.g. VT, CA_QC) for domain detection"),
-    ) -> Dict[str, Any]:
-        """Evaluate conducted power and EIRP compliance under FCC Part 15.247 / ISED RSS-247 rules."""
-        from meshscout.core.regulatory import (
-            RegulatoryDomain,
-            advise_eirp as core_advise_eirp,
-            detect_regulatory_domain,
-        )
-
-        reg_domain = RegulatoryDomain.US_FCC_PART15
-        if domain:
-            try:
-                reg_domain = RegulatoryDomain(domain)
-            except ValueError:
-                reg_domain = detect_regulatory_domain(domain)
-        elif region:
-            reg_domain = detect_regulatory_domain(region)
-
-        report = core_advise_eirp(
-            tx_power_dbm=tx_power_dbm,
-            antenna_gain_dbi=antenna_gain_dbi,
-            cable_loss_db=cable_loss_db,
-            frequency_mhz=frequency_mhz,
-            domain=reg_domain,
-        )
-        res = report.model_dump(mode="json")
-        res["ok"] = True
-        return res
+    app.include_router(build_regulatory_router())
 
     return app
 

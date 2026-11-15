@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from meshscout.cli import build_parser, main
+from meshscout.cli_tower_helpers import format_tower_ingest_summary, run_towers_subcommand
 from meshscout.core.contracts import SiteType
 from meshscout.core.tower_registry import FrictionTier, UnifiedTowerRegistry
 from meshscout.web.app import create_web_app
@@ -240,3 +241,144 @@ def test_api_towers_ingest_invalid_region(client: TestClient) -> None:
     resp = client.post("/api/towers/ingest", json={"source": "civic", "region": "UNKNOWN_REGION_123"})
     assert resp.status_code == 400
     assert "Invalid region" in resp.json()["detail"]
+
+
+def test_format_tower_ingest_summary() -> None:
+    """Verify pure human-readable summary formatting for tower ingestion results."""
+    ingest_res = {
+        "ok": True,
+        "source": "fcc_asr",
+        "ingested_count": 1295,
+        "by_region": {"VT": 1250, "CA_QC": 45},
+        "by_friction_tier": {
+            "tier_1_civic": 200,
+            "tier_2_agricultural": 95,
+            "tier_3_commercial": 1000,
+        },
+    }
+    summary = format_tower_ingest_summary(ingest_res, "fcc_asr")
+    assert "Ingested 1295 towers from fcc_asr" in summary
+    assert "Breakdown by Region:" in summary
+    ca_idx = summary.index("   - CA_QC       : 45 towers")
+    vt_idx = summary.index("   - VT          : 1,250 towers")
+    assert ca_idx < vt_idx
+    assert "   - Tier 1 Civic:        200 towers" in summary
+    assert "   - Tier 2 Agricultural: 95 towers" in summary
+    assert "   - Tier 3 Commercial:   1,000 towers" in summary
+    assert summary.endswith("============================================================\n")
+
+
+def test_cli_towers_ingest_civic_human_readable(
+    temp_towers_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify 'towers ingest civic --path ...' human-readable output and DB persistence."""
+    civic_path = Path(__file__).resolve().parent.parent / "fixtures" / "civic_highsites_catalog.json"
+    out_buf = io.StringIO()
+    monkeypatch.setattr("sys.stdout", out_buf)
+
+    exit_code = main(
+        [
+            "towers",
+            "ingest",
+            "civic",
+            "--path",
+            str(civic_path),
+            "--db-path",
+            str(temp_towers_db),
+        ]
+    )
+    assert exit_code == 0
+    output = out_buf.getvalue()
+    assert "towers from civic" in output
+    assert "Breakdown by Region:" in output
+    assert "Breakdown by Friction Tier:" in output
+    assert "Tier 1 Civic:" in output
+
+    with UnifiedTowerRegistry(db_path=temp_towers_db) as registry:
+        assert len(registry.query_towers(max_friction_tier=1)) > 0
+
+
+def test_cli_towers_ingest_civic_json_mode(
+    temp_towers_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify 'towers ingest civic --path ... --json' emits structured JSON summary."""
+    civic_path = Path(__file__).resolve().parent.parent / "fixtures" / "civic_highsites_catalog.json"
+    out_buf = io.StringIO()
+    monkeypatch.setattr("sys.stdout", out_buf)
+
+    exit_code = main(
+        [
+            "towers",
+            "ingest",
+            "civic",
+            "--path",
+            str(civic_path),
+            "--region",
+            "VT",
+            "--db-path",
+            str(temp_towers_db),
+            "--json",
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(out_buf.getvalue())
+    assert payload["ok"] is True
+    assert payload["source"] == "civic"
+    assert payload["ingested_count"] > 0
+    assert "VT" in payload["by_region"]
+    assert payload["by_friction_tier"]["tier_1_civic"] > 0
+
+
+def test_cli_towers_ingest_validation_failures(
+    temp_towers_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify POSIX exit codes 2 and 1 for validation and missing-path errors."""
+    civic_path = Path(__file__).resolve().parent.parent / "fixtures" / "civic_highsites_catalog.json"
+    err_buf = io.StringIO()
+    monkeypatch.setattr("sys.stderr", err_buf)
+
+    # 1. Missing source -> exit code 2
+    code_no_source = main(["towers", "ingest", "--path", str(civic_path)])
+    assert code_no_source == 2
+    assert "Must specify source" in err_buf.getvalue()
+
+    # 2. Missing both --path/--input and --from-source -> exit code 2
+    err_buf.seek(0)
+    err_buf.truncate(0)
+    code_no_path = main(["towers", "ingest", "civic"])
+    assert code_no_path == 2
+    assert "Must specify either --path/--input <PATH> or --from-source" in err_buf.getvalue()
+
+    # 3. Nonexistent path -> exit code 1
+    err_buf.seek(0)
+    err_buf.truncate(0)
+    missing_file = tmp_path / "nonexistent_towers.json"
+    code_missing_file = main(
+        [
+            "towers",
+            "ingest",
+            "civic",
+            "--path",
+            str(missing_file),
+            "--db-path",
+            str(temp_towers_db),
+        ]
+    )
+    assert code_missing_file == 1
+    assert f"Source file not found: {missing_file}" in err_buf.getvalue()
+
+    # 4. Offline --from-source fetch failure -> exit code 1
+    err_buf.seek(0)
+    err_buf.truncate(0)
+
+    def _fail_fetch(_src: str) -> Path:
+        raise RuntimeError("simulated offline fetch error")
+
+    monkeypatch.setattr("meshscout.adapters.source_fetch.fetch_source", _fail_fetch)
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["towers", "ingest", "civic", "--from-source", "--db-path", str(temp_towers_db)]
+    )
+    code_fetch_err = run_towers_subcommand(parsed)
+    assert code_fetch_err == 1
+    assert "Error fetching source 'civic': simulated offline fetch error" in err_buf.getvalue()

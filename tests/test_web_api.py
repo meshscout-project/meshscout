@@ -2731,6 +2731,174 @@ def test_post_mesh_route_rejects_alligator_bridge_repeater(client: TestClient) -
     )
 
 
+def test_regulatory_subrouter_direct_mounting_and_openapi_parity(client: TestClient) -> None:
+    """Verify build_regulatory_router() and module router mount cleanly with identical schemas and zero duplicates."""
+    from fastapi import APIRouter, FastAPI
+    from meshscout.web.regulatory_routes import build_regulatory_router, router
+
+    assert isinstance(router, APIRouter)
+    sub_router = build_regulatory_router()
+    assert isinstance(sub_router, APIRouter)
+
+    expected_paths = {
+        "/api/v1/attribution",
+        "/api/v1/regions/north-america",
+        "/api/v1/regulatory/eirp",
+    }
+    router_paths = {route.path for route in sub_router.routes}
+    assert router_paths == expected_paths
+
+    # Verify create_web_app mounts each extracted endpoint exactly once (zero duplicated inline routes)
+    mounted_paths = []
+    for route in client.app.routes:
+        route_path = getattr(route, "path", None)
+        if route_path in expected_paths:
+            mounted_paths.append(route_path)
+        elif hasattr(route, "original_router"):
+            for nested in route.original_router.routes:
+                nested_path = getattr(nested, "path", None)
+                if nested_path in expected_paths:
+                    mounted_paths.append(nested_path)
+    assert sorted(mounted_paths) == sorted(expected_paths)
+    web_openapi_paths = set(client.get("/openapi.json").json()["paths"].keys())
+    assert expected_paths.issubset(web_openapi_paths)
+
+    standalone_app = FastAPI()
+    standalone_app.include_router(sub_router)
+
+    with TestClient(standalone_app) as standalone_client:
+        attr_resp = standalone_client.get("/api/v1/attribution")
+        assert attr_resp.status_code == 200
+        attr_data = attr_resp.json()
+        assert attr_data["ok"] is True
+        assert attr_data["count"] == len(attr_data["sources"])
+        assert "fcc_asr" in attr_data["sources"]
+        assert "ised_sms" in attr_data["sources"]
+
+        openapi = standalone_client.get("/openapi.json").json()
+        na_params = {
+            p["name"]: p
+            for p in openapi["paths"]["/api/v1/regions/north-america"]["get"]["parameters"]
+        }
+        assert "country" in na_params
+
+        eirp_params = {
+            p["name"]: p
+            for p in openapi["paths"]["/api/v1/regulatory/eirp"]["get"]["parameters"]
+        }
+        assert set(eirp_params.keys()) == {
+            "tx_power_dbm",
+            "antenna_gain_dbi",
+            "cable_loss_db",
+            "frequency_mhz",
+            "domain",
+            "region",
+        }
+        assert eirp_params["tx_power_dbm"]["schema"]["default"] == 20.0
+        assert eirp_params["antenna_gain_dbi"]["schema"]["default"] == 3.0
+        assert eirp_params["cable_loss_db"]["schema"]["default"] == 0.0
+        assert eirp_params["frequency_mhz"]["schema"]["default"] == 915.0
+
+
+def test_regulatory_subrouter_north_america_us_vs_ca_filtering(client: TestClient) -> None:
+    """Verify US vs CA country filtering on /api/v1/regions/north-america."""
+    from fastapi import FastAPI
+    from meshscout.web.regulatory_routes import build_regulatory_router
+
+    standalone_app = FastAPI()
+    standalone_app.include_router(build_regulatory_router())
+
+    with TestClient(standalone_app) as sub_client:
+        resp_all = sub_client.get("/api/v1/regions/north-america")
+        assert resp_all.status_code == 200
+        data_all = resp_all.json()
+        assert data_all["ok"] is True
+        assert data_all["count"] == 65
+        assert len(data_all["regions"]) == 65
+
+        resp_us = sub_client.get("/api/v1/regions/north-america?country=US")
+        assert resp_us.status_code == 200
+        data_us = resp_us.json()
+        assert data_us["ok"] is True
+        assert data_us["count"] == 52
+        assert len(data_us["regions"]) == 52
+        assert all(r["country"] == "US" for r in data_us["regions"])
+        us_codes = {r["state_code"] for r in data_us["regions"]}
+        assert "VT" in us_codes
+        assert "CA_QC" not in us_codes
+
+        resp_ca = sub_client.get("/api/v1/regions/north-america?country=CA")
+        assert resp_ca.status_code == 200
+        data_ca = resp_ca.json()
+        assert data_ca["ok"] is True
+        assert data_ca["count"] == 13
+        assert len(data_ca["regions"]) == 13
+        assert all(r["country"] == "CA" for r in data_ca["regions"])
+        ca_codes = {r["state_code"] for r in data_ca["regions"]}
+        assert "CA_QC" in ca_codes
+        assert "VT" not in ca_codes
+
+        assert data_us["count"] + data_ca["count"] == data_all["count"]
+
+        # Verify case-insensitivity and parity with full create_web_app() client
+        resp_us_web = client.get("/api/v1/regions/north-america?country=us")
+        assert resp_us_web.status_code == 200
+        assert resp_us_web.json()["count"] == 52
+
+        resp_none = sub_client.get("/api/v1/regions/north-america?country=MX")
+        assert resp_none.status_code == 200
+        assert resp_none.json() == {"ok": True, "count": 0, "regions": []}
+
+
+def test_regulatory_subrouter_eirp_explicit_domain_vs_invalid_domain_fallback(
+    client: TestClient,
+) -> None:
+    """Verify explicit domain enum vs invalid-domain region fallback on /api/v1/regulatory/eirp."""
+    # 1. Explicit valid RegulatoryDomain enum values take precedence
+    resp_explicit_ca = client.get(
+        "/api/v1/regulatory/eirp?tx_power_dbm=22.0&antenna_gain_dbi=5.0&domain=CA_ISED_RSS247"
+    )
+    assert resp_explicit_ca.status_code == 200
+    data_explicit_ca = resp_explicit_ca.json()
+    assert data_explicit_ca["ok"] is True
+    assert data_explicit_ca["domain"] == "CA_ISED_RSS247"
+    assert data_explicit_ca["eirp_dbm"] == 27.0
+
+    resp_explicit_us_override = client.get(
+        "/api/v1/regulatory/eirp?domain=US_FCC_PART15&region=CA_QC"
+    )
+    assert resp_explicit_us_override.status_code == 200
+    assert resp_explicit_us_override.json()["domain"] == "US_FCC_PART15"
+
+    resp_explicit_ca_override = client.get(
+        "/api/v1/regulatory/eirp?domain=CA_ISED_RSS247&region=VT"
+    )
+    assert resp_explicit_ca_override.status_code == 200
+    assert resp_explicit_ca_override.json()["domain"] == "CA_ISED_RSS247"
+
+    # 2. Invalid domain enum value falls back to region detection (both via domain string and region query param)
+    resp_domain_region_code = client.get("/api/v1/regulatory/eirp?domain=CA_QC")
+    assert resp_domain_region_code.status_code == 200
+    assert resp_domain_region_code.json()["domain"] == "CA_ISED_RSS247"
+
+    resp_invalid_with_ca_region = client.get(
+        "/api/v1/regulatory/eirp?domain=UNKNOWN_DOMAIN&region=CA_ON"
+    )
+    assert resp_invalid_with_ca_region.status_code == 200
+    assert resp_invalid_with_ca_region.json()["domain"] == "CA_ISED_RSS247"
+
+    resp_invalid_default_us = client.get("/api/v1/regulatory/eirp?domain=UNKNOWN_DOMAIN")
+    assert resp_invalid_default_us.status_code == 200
+    assert resp_invalid_default_us.json()["domain"] == "US_FCC_PART15"
+
+    # 3. Verify all three sub-router endpoints execute strictly offline with zero network calls
+    from unittest.mock import patch
+
+    with patch("urllib.request.urlopen", side_effect=AssertionError("Network access forbidden")):
+        assert client.get("/api/v1/attribution").status_code == 200
+        assert client.get("/api/v1/regions/north-america?country=US").status_code == 200
+        assert client.get("/api/v1/regulatory/eirp?domain=CA_ISED_RSS247").status_code == 200
+
 
 
 

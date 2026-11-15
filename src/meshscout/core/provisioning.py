@@ -32,6 +32,8 @@ class ProvisioningPayload(BaseModel):
     frequency_mhz: float = Field(..., description="Center frequency in MHz")
     bandwidth_khz: float = Field(..., description="Channel bandwidth in kHz")
     spreading_factor: int = Field(..., description="LoRa Spreading Factor")
+    tx_power_dbm: Optional[float] = Field(default=None, description="Optional transmit power in dBm")
+    hop_limit: Optional[int] = Field(default=None, description="Optional packet hop limit")
     raw_url_or_text: str = Field(..., description="Raw shareable configuration URL or config stanza")
     cli_commands: List[str] = Field(default_factory=list, description="Ready-to-paste CLI execution commands")
     inline_svg_qr: str = Field(..., description="Pure-Python generated inline SVG QR code")
@@ -526,10 +528,20 @@ def generate_meshtastic_cli_commands(
     url: Optional[str] = None,
     role: str = "REPEATER",
     region: str = "US",
+    tx_power_dbm: Optional[float] = None,
+    hop_limit: Optional[int] = None,
 ) -> List[str]:
     """Generate reproducible Meshtastic CLI device provisioning commands."""
+    lora_cmd = (
+        f'meshtastic --set-owner "{site.name}" --set lora.region {region} --set lora.modem_preset {modem_preset}'
+    )
+    if tx_power_dbm is not None:
+        lora_cmd += f" --set lora.tx_power {int(round(tx_power_dbm))}"
+    if hop_limit is not None:
+        lora_cmd += f" --set lora.hop_limit {int(hop_limit)}"
+
     cmds = [
-        f'meshtastic --set-owner "{site.name}" --set lora.region {region} --set lora.modem_preset {modem_preset}',
+        lora_cmd,
         f"meshtastic --set device.role {role}",
         f"meshtastic --set-lat {site.location.lat:.6f} --set-lon {site.location.lon:.6f} --set-alt {int(site.location.elevation_m)}",
     ]
@@ -544,11 +556,19 @@ def generate_meshcore_cli_commands(
     bw_khz: float = 125.0,
     sf: int = 10,
     cr: str = "4/5",
+    tx_power_dbm: Optional[float] = None,
+    hop_limit: Optional[int] = None,
 ) -> List[str]:
     """Generate standard MeshCore repeater CLI configuration commands."""
-    return [
-        f'meshcore-cli repeater configure --freq {freq_mhz:.1f} --bw {bw_khz:.1f} --sf {sf} --cr {cr} --name "{site.name}"'
-    ]
+    cmd = (
+        f'meshcore-cli repeater configure --freq {freq_mhz:.1f} --bw {bw_khz:.1f} '
+        f'--sf {sf} --cr {cr} --name "{site.name}"'
+    )
+    if tx_power_dbm is not None:
+        cmd += f" --tx-power {int(round(tx_power_dbm))}"
+    if hop_limit is not None:
+        cmd += f" --hop-limit {int(hop_limit)}"
+    return [cmd]
 
 
 def generate_reticulum_rnode_stanza(
@@ -557,14 +577,16 @@ def generate_reticulum_rnode_stanza(
     bw_khz: float = 125.0,
     sf: int = 11,
     cr: int = 5,
-    tx_power_dbm: float = 22.0,
+    tx_power_dbm: Optional[float] = 22.0,
     port: str = "/dev/ttyUSB0",
+    hop_limit: Optional[int] = None,
 ) -> str:
     """Generate ready-to-paste Reticulum Network Stack (rns.conf) RNodeInterface stanza."""
     freq_hz = int(round(freq_mhz * 1_000_000))
     bw_hz = int(round(bw_khz * 1_000))
-    tx_power = int(round(tx_power_dbm))
-    return (
+    effective_tx_power_dbm = 22.0 if tx_power_dbm is None else tx_power_dbm
+    tx_power = int(round(effective_tx_power_dbm))
+    stanza = (
         f"[[RNode-{site.site_id}]]\n"
         f"  type = RNodeInterface\n"
         f"  interface_enabled = True\n"
@@ -575,6 +597,9 @@ def generate_reticulum_rnode_stanza(
         f"  spreadingfactor = {sf}\n"
         f"  codingrate = {cr}"
     )
+    if hop_limit is not None:
+        stanza += f"\n  hop_limit = {int(hop_limit)}"
+    return stanza
 
 
 def generate_site_provisioning(
@@ -582,12 +607,20 @@ def generate_site_provisioning(
     target: ProvisioningTarget = ProvisioningTarget.MESHTASTIC,
     channel_name: str = "MeshScout",
     psk_override: Optional[str] = None,
+    tx_power_dbm: Optional[float] = None,
+    hop_limit: Optional[int] = None,
 ) -> ProvisioningPayload:
     """Synthesize complete multi-protocol provisioning payload and inline SVG QR code."""
     if target == ProvisioningTarget.MESHTASTIC:
         proto = PROTOCOL_PROFILES["MESHTASTIC_LONGFAST"]
         url = encode_meshtastic_channel_url(channel_name=channel_name, psk_override=psk_override)
-        cmds = generate_meshtastic_cli_commands(site=site, modem_preset="LONG_FAST", url=url)
+        cmds = generate_meshtastic_cli_commands(
+            site=site,
+            modem_preset="LONG_FAST",
+            url=url,
+            tx_power_dbm=tx_power_dbm,
+            hop_limit=hop_limit,
+        )
         qr_svg = generate_qr_svg(url)
         return ProvisioningPayload(
             target=target,
@@ -596,6 +629,8 @@ def generate_site_provisioning(
             frequency_mhz=proto.frequency_mhz,
             bandwidth_khz=proto.bandwidth_khz,
             spreading_factor=proto.spreading_factor,
+            tx_power_dbm=tx_power_dbm,
+            hop_limit=hop_limit,
             raw_url_or_text=url,
             cli_commands=cmds,
             inline_svg_qr=qr_svg,
@@ -608,6 +643,8 @@ def generate_site_provisioning(
             freq_mhz=proto.frequency_mhz,
             bw_khz=proto.bandwidth_khz,
             sf=proto.spreading_factor,
+            tx_power_dbm=tx_power_dbm,
+            hop_limit=hop_limit,
         )
         cli_text = cmds[0]
         qr_svg = generate_qr_svg(cli_text)
@@ -618,6 +655,8 @@ def generate_site_provisioning(
             frequency_mhz=proto.frequency_mhz,
             bandwidth_khz=proto.bandwidth_khz,
             spreading_factor=proto.spreading_factor,
+            tx_power_dbm=tx_power_dbm,
+            hop_limit=hop_limit,
             raw_url_or_text=cli_text,
             cli_commands=cmds,
             inline_svg_qr=qr_svg,
@@ -630,6 +669,8 @@ def generate_site_provisioning(
             freq_mhz=proto.frequency_mhz,
             bw_khz=proto.bandwidth_khz,
             sf=proto.spreading_factor,
+            tx_power_dbm=tx_power_dbm if tx_power_dbm is not None else 22.0,
+            hop_limit=hop_limit,
         )
         cmds = [
             f"# Append stanza to /etc/reticulum/rns.conf on site {site.site_id}",
@@ -643,6 +684,8 @@ def generate_site_provisioning(
             frequency_mhz=proto.frequency_mhz,
             bandwidth_khz=proto.bandwidth_khz,
             spreading_factor=proto.spreading_factor,
+            tx_power_dbm=tx_power_dbm,
+            hop_limit=hop_limit,
             raw_url_or_text=stanza,
             cli_commands=cmds,
             inline_svg_qr=qr_svg,

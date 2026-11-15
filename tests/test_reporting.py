@@ -7,10 +7,15 @@ import json
 from meshscout.core.contracts import (
     AccessDifficulty,
     Coordinate,
+    ElevationPoint,
+    ElevationProfile,
     LinkBudgetResult,
+    RadioConfig,
+    ReachabilityState,
     SiteCandidate,
     SiteType,
 )
+from meshscout.core.itm import evaluate_point_to_point_link
 from meshscout.core.optimizer import (
     RepeaterSelectionStep,
     SetCoverOptimizationResult,
@@ -24,6 +29,7 @@ from meshscout.reporting import (
     export_geojson_feature_collection,
     generate_deployment_dossier_markdown,
     generate_landowner_pitch_html,
+    generate_link_survey_html,
     generate_portable_workbench_html,
 )
 
@@ -322,5 +328,304 @@ class TestGpxAndKmlExport:
         assert "2.40°" in html_doc
         assert "CLEAR LINE-OF-SIGHT" in html_doc
         assert "Field Deployment Pre-Flight Checklist" in html_doc
+
+
+def _sample_asymmetric_links() -> tuple[LinkBudgetResult, LinkBudgetResult]:
+    """Build deterministic asymmetric LinkBudgetResults for HEAR_ONLY_ALLIGATOR and TWO_WAY."""
+    alligator_link = LinkBudgetResult(
+        source_id="VT-MANS-01",
+        target_id="VT-ESSX-WT1",
+        distance_km=24.3,
+        free_space_loss_db=119.38,
+        diffraction_loss_db=8.5,
+        total_path_loss_db=142.88,
+        rx_power_dbm=-138.2,
+        link_margin_db=-4.2,
+        has_line_of_sight=False,
+        fresnel_clearance_ratio=0.45,
+        downlink_rx_dbm=-112.4,
+        downlink_margin_db=16.6,
+        uplink_rx_dbm=-138.2,
+        uplink_margin_db=-4.2,
+        asymmetry_delta_db=20.8,
+        reachability_state=ReachabilityState.HEAR_ONLY_ALLIGATOR,
+    )
+    two_way_link = LinkBudgetResult(
+        source_id="VT-ESSX-WT1",
+        target_id="VT-MANS-01",
+        distance_km=24.3,
+        free_space_loss_db=119.38,
+        diffraction_loss_db=0.0,
+        total_path_loss_db=119.38,
+        rx_power_dbm=-96.4,
+        link_margin_db=32.6,
+        has_line_of_sight=True,
+        fresnel_clearance_ratio=3.42,
+        downlink_rx_dbm=-89.4,
+        downlink_margin_db=40.6,
+        uplink_rx_dbm=-96.4,
+        uplink_margin_db=32.6,
+        asymmetry_delta_db=8.0,
+        reachability_state=ReachabilityState.TWO_WAY,
+    )
+    return alligator_link, two_way_link
+
+
+def _sample_optimization(s1: SiteCandidate, s2: SiteCandidate) -> SetCoverOptimizationResult:
+    """Build a minimal deterministic SetCoverOptimizationResult for dossier tests."""
+    return SetCoverOptimizationResult(
+        selected_sites=[s1, s2],
+        selection_steps=[],
+        total_targets=4,
+        covered_target_ids=["G1", "G2", "G3", "G4"],
+        uncovered_target_ids=[],
+        achieved_coverage_fraction=1.0,
+        achieved_weighted_coverage_fraction=1.0,
+        target_coverage_threshold=0.90,
+        threshold_met=True,
+        total_cost=1.70,
+    )
+
+
+class TestAsymmetricLinkBudgetReporting:
+    """Tests for asymmetric LinkBudgetResult fields and legacy None fallback across reports."""
+
+    def test_geojson_legacy_none_fallback_and_asymmetric_properties(self) -> None:
+        s1, s2 = _sample_sites()
+        legacy_link = _sample_link()
+        alligator_link, two_way_link = _sample_asymmetric_links()
+
+        # 1. Legacy symmetric link (asymmetric fields None)
+        legacy_fc = json.loads(
+            json.dumps(export_geojson_feature_collection(sites=[s1, s2], links=[legacy_link]))
+        )
+        legacy_lines = [
+            f for f in legacy_fc["features"] if f["geometry"]["type"] == "LineString"
+        ]
+        assert len(legacy_lines) == 1
+        legacy_props = legacy_lines[0]["properties"]
+        assert legacy_props["feature_kind"] == "rf_link"
+        assert legacy_props["rx_power_dbm"] == -91.38
+        assert legacy_props["link_margin_db"] == 43.62
+        assert legacy_props["downlink_rx_dbm"] is None
+        assert legacy_props["downlink_margin_db"] is None
+        assert legacy_props["uplink_rx_dbm"] is None
+        assert legacy_props["uplink_margin_db"] is None
+        assert legacy_props["asymmetry_delta_db"] is None
+        assert legacy_props["reachability_state"] is None
+
+        # 2. Populated asymmetric links (HEAR_ONLY_ALLIGATOR and TWO_WAY)
+        asym_fc = json.loads(
+            json.dumps(
+                export_geojson_feature_collection(
+                    sites=[s1, s2], links=[alligator_link, two_way_link]
+                )
+            )
+        )
+        asym_lines = [
+            f for f in asym_fc["features"] if f["geometry"]["type"] == "LineString"
+        ]
+        assert len(asym_lines) == 2
+
+        p_alligator = asym_lines[0]["properties"]
+        assert p_alligator["downlink_rx_dbm"] == -112.4
+        assert p_alligator["downlink_margin_db"] == 16.6
+        assert p_alligator["uplink_rx_dbm"] == -138.2
+        assert p_alligator["uplink_margin_db"] == -4.2
+        assert p_alligator["asymmetry_delta_db"] == 20.8
+        assert p_alligator["reachability_state"] == "hear_only_alligator"
+
+        p_two_way = asym_lines[1]["properties"]
+        assert p_two_way["downlink_rx_dbm"] == -89.4
+        assert p_two_way["downlink_margin_db"] == 40.6
+        assert p_two_way["uplink_rx_dbm"] == -96.4
+        assert p_two_way["uplink_margin_db"] == 32.6
+        assert p_two_way["asymmetry_delta_db"] == 8.0
+        assert p_two_way["reachability_state"] == "two_way"
+
+    def test_markdown_dossier_legacy_fallback_and_asymmetric_columns(self) -> None:
+        s1, s2 = _sample_sites()
+        v1 = score_site_viability(s1).value
+        v2 = score_site_viability(s2).value
+        assert v1 is not None and v2 is not None
+        opt = _sample_optimization(s1, s2)
+
+        # 1. Legacy symmetric link preserves exact 8-column Markdown table
+        legacy_md = generate_deployment_dossier_markdown(
+            region_name="Chittenden County, VT",
+            optimization=opt,
+            viability_scores=[v1, v2],
+            links=[_sample_link()],
+        )
+        assert (
+            "| Source | Target | Distance (km) | Path Loss (dB) | RX Power (dBm) | Link Margin (dB) | LOS | Fresnel Ratio |"
+            in legacy_md
+        )
+        assert "Downlink RX" not in legacy_md
+        assert "Uplink RX" not in legacy_md
+        assert "Asymmetry Delta" not in legacy_md
+        assert "Reachability" not in legacy_md
+
+        # 2. Populated asymmetric links surface directional RX, margins, delta, and state
+        alligator_link, two_way_link = _sample_asymmetric_links()
+        asym_md = generate_deployment_dossier_markdown(
+            region_name="Chittenden County, VT",
+            optimization=opt,
+            viability_scores=[v1, v2],
+            links=[alligator_link, two_way_link],
+        )
+        assert "Downlink RX (dBm)" in asym_md
+        assert "Downlink Margin (dB)" in asym_md
+        assert "Uplink RX (dBm)" in asym_md
+        assert "Uplink Margin (dB)" in asym_md
+        assert "Asymmetry Delta (dB)" in asym_md
+        assert "Reachability" in asym_md
+        assert "-112.4" in asym_md
+        assert "+16.6" in asym_md
+        assert "-138.2" in asym_md
+        assert "-4.2" in asym_md
+        assert "+20.8" in asym_md
+        assert "`hear_only_alligator`" in asym_md
+        assert "-89.4" in asym_md
+        assert "+40.6" in asym_md
+        assert "-96.4" in asym_md
+        assert "+32.6" in asym_md
+        assert "+8.0" in asym_md
+        assert "`two_way`" in asym_md
+
+    def test_link_survey_html_legacy_fallback_and_asymmetric_rendering(self) -> None:
+        s1, s2 = _sample_sites()
+        legacy_link = _sample_link()
+        alligator_link, two_way_link = _sample_asymmetric_links()
+
+        # 1. Legacy symmetric link omits directional asymmetric table
+        legacy_html = generate_link_survey_html(source=s1, target=s2, link=legacy_link)
+        assert "RX Signal Power" in legacy_html
+        assert "+43.6 dB" in legacy_html
+        assert "Downlink RX" not in legacy_html
+        assert "Uplink RX" not in legacy_html
+        assert "Asymmetry Delta" not in legacy_html
+        assert "Reachability State" not in legacy_html
+
+        # 2. Asymmetric HEAR_ONLY_ALLIGATOR link surfaces all directional fields
+        alligator_html = generate_link_survey_html(source=s1, target=s2, link=alligator_link)
+        assert "Downlink RX" in alligator_html
+        assert "-112.4 dBm" in alligator_html
+        assert "+16.6 dB" in alligator_html
+        assert "Uplink RX" in alligator_html
+        assert "-138.2 dBm" in alligator_html
+        assert "-4.2 dB" in alligator_html
+        assert "Asymmetry Delta" in alligator_html
+        assert "+20.8 dB" in alligator_html
+        assert "Reachability State" in alligator_html
+        assert "HEAR_ONLY_ALLIGATOR" in alligator_html
+        assert "hear_only_alligator" in alligator_html
+
+        # 3. Asymmetric TWO_WAY link surfaces all directional fields
+        two_way_html = generate_link_survey_html(source=s2, target=s1, link=two_way_link)
+        assert "-89.4 dBm" in two_way_html
+        assert "+40.6 dB" in two_way_html
+        assert "-96.4 dBm" in two_way_html
+        assert "+32.6 dB" in two_way_html
+        assert "+8.0 dB" in two_way_html
+        assert "TWO_WAY" in two_way_html
+        assert "two_way" in two_way_html
+
+    def test_portable_workbench_html_legacy_fallback_and_asymmetric_table(self) -> None:
+        s1, s2 = _sample_sites()
+        legacy_link = _sample_link()
+        alligator_link, two_way_link = _sample_asymmetric_links()
+
+        # 1. Legacy symmetric link preserves 8-column table without directional headers
+        legacy_wb = generate_portable_workbench_html(
+            region_name="Chittenden County, VT",
+            sites=[s1, s2],
+            links=[legacy_link],
+        )
+        assert "Point-to-Point RF Link Budget Table" in legacy_wb
+        assert "43.6 dB" in legacy_wb
+        assert "Downlink RX" not in legacy_wb
+        assert "Uplink RX" not in legacy_wb
+        assert "Asymmetry Delta" not in legacy_wb
+        assert "Reachability" not in legacy_wb
+
+        # 2. Populated asymmetric links surface directional columns and reachability badges
+        asym_wb = generate_portable_workbench_html(
+            region_name="Chittenden County, VT",
+            sites=[s1, s2],
+            links=[alligator_link, two_way_link],
+        )
+        assert "<th>Downlink RX</th>" in asym_wb
+        assert "<th>Downlink Margin</th>" in asym_wb
+        assert "<th>Uplink RX</th>" in asym_wb
+        assert "<th>Uplink Margin</th>" in asym_wb
+        assert "<th>Asymmetry Delta</th>" in asym_wb
+        assert "<th>Reachability</th>" in asym_wb
+        assert "-112.4 dBm" in asym_wb
+        assert "+16.6 dB" in asym_wb
+        assert "-138.2 dBm" in asym_wb
+        assert "-4.2 dB" in asym_wb
+        assert "+20.8 dB" in asym_wb
+        assert "HEAR_ONLY_ALLIGATOR" in asym_wb
+        assert "hear_only_alligator" in asym_wb
+        assert "-89.4 dBm" in asym_wb
+        assert "+40.6 dB" in asym_wb
+        assert "-96.4 dBm" in asym_wb
+        assert "+32.6 dB" in asym_wb
+        assert "+8.0 dB" in asym_wb
+        assert "TWO_WAY" in asym_wb
+        assert "two_way" in asym_wb
+
+    def test_itm_computed_asymmetric_link_end_to_end_reporting(self) -> None:
+        s1, s2 = _sample_sites()
+        profile = ElevationProfile(
+            source_site=s1,
+            target_site=s2,
+            distance_km=32.0,
+            points=[
+                ElevationPoint(distance_m=0.0, elevation_m=s1.location.elevation_m, coordinate=s1.location),
+                ElevationPoint(
+                    distance_m=16000.0,
+                    elevation_m=790.0,
+                    coordinate=Coordinate(lat=44.517, lon=-72.962, elevation_m=790.0),
+                ),
+                ElevationPoint(distance_m=32000.0, elevation_m=s2.location.elevation_m, coordinate=s2.location),
+            ],
+        )
+        summit_radio = RadioConfig(
+            tx_power_dbm=30.0,
+            antenna_gain_dbi=8.0,
+            cable_loss_db=1.0,
+            rx_sensitivity_dbm=-134.0,
+        )
+        pocket_client = RadioConfig(
+            tx_power_dbm=14.0,
+            antenna_gain_dbi=1.5,
+            cable_loss_db=0.0,
+            rx_sensitivity_dbm=-130.0,
+        )
+        res = evaluate_point_to_point_link(
+            profile=profile,
+            radio=summit_radio,
+            target_radio=pocket_client,
+            source_noise_penalty_db=18.0,
+            client_env_loss_db=22.0,
+        )
+        assert res.ok and res.value is not None
+        computed_link = res.value
+        assert computed_link.reachability_state is not None
+        assert computed_link.asymmetry_delta_db is not None
+
+        fc = export_geojson_feature_collection(sites=[s1, s2], links=[computed_link])
+        line_props = [
+            f["properties"] for f in fc["features"] if f["geometry"]["type"] == "LineString"
+        ][0]
+        assert line_props["reachability_state"] == computed_link.reachability_state.value
+        assert line_props["asymmetry_delta_db"] == computed_link.asymmetry_delta_db
+
+        survey_html = generate_link_survey_html(source=s1, target=s2, link=computed_link, radio=summit_radio)
+        assert computed_link.reachability_state.value in survey_html
+        assert f"{computed_link.asymmetry_delta_db:+.1f} dB" in survey_html
+
 
 

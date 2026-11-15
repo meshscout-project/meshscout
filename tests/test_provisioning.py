@@ -199,6 +199,69 @@ class TestMultiProtocolWireEncoding:
         assert "txpower = 22" in stanza
         assert "spreadingfactor = 11" in stanza
         assert "codingrate = 5" in stanza
+        assert "hop_limit" not in stanza
+
+    def test_generate_meshtastic_cli_tx_power_and_hop_limit_parity(self) -> None:
+        site = _sample_site()
+        default_cmds = generate_meshtastic_cli_commands(site)
+        assert all("--set lora.tx_power" not in c for c in default_cmds)
+        assert all("--set lora.hop_limit" not in c for c in default_cmds)
+
+        tx_only = generate_meshtastic_cli_commands(site, tx_power_dbm=27.6)
+        assert "--set lora.tx_power 28" in tx_only[0]
+        assert "--set lora.hop_limit" not in tx_only[0]
+
+        hop_only = generate_meshtastic_cli_commands(site, hop_limit=2)
+        assert "--set lora.hop_limit 2" in hop_only[0]
+        assert "--set lora.tx_power" not in hop_only[0]
+
+        both = generate_meshtastic_cli_commands(site, tx_power_dbm=22.0, hop_limit=3)
+        assert "--set lora.tx_power 22" in both[0]
+        assert "--set lora.hop_limit 3" in both[0]
+
+    def test_generate_meshcore_cli_tx_power_and_hop_limit_parity(self) -> None:
+        site = _sample_site()
+        default_cmds = generate_meshcore_cli_commands(site)
+        assert "--tx-power" not in default_cmds[0]
+        assert "--hop-limit" not in default_cmds[0]
+        assert (
+            default_cmds[0]
+            == 'meshcore-cli repeater configure --freq 915.0 --bw 125.0 --sf 10 --cr 4/5 --name "Mount Mansfield Ridge"'
+        )
+
+        tx_only = generate_meshcore_cli_commands(site, tx_power_dbm=19.8)
+        assert "--tx-power 20" in tx_only[0]
+        assert "--hop-limit" not in tx_only[0]
+
+        hop_only = generate_meshcore_cli_commands(site, hop_limit=4)
+        assert "--hop-limit 4" in hop_only[0]
+        assert "--tx-power" not in hop_only[0]
+
+        both = generate_meshcore_cli_commands(site, tx_power_dbm=28.0, hop_limit=3)
+        assert "--tx-power 28" in both[0]
+        assert "--hop-limit 3" in both[0]
+
+    def test_generate_reticulum_rnode_stanza_tx_power_and_hop_limit_parity(self) -> None:
+        site = _sample_site()
+        default_stanza = generate_reticulum_rnode_stanza(site)
+        assert "txpower = 22" in default_stanza
+        assert "hop_limit" not in default_stanza
+
+        custom_stanza = generate_reticulum_rnode_stanza(
+            site=site,
+            tx_power_dbm=17.4,
+            hop_limit=4,
+        )
+        assert "txpower = 17" in custom_stanza
+        assert "hop_limit = 4" in custom_stanza
+
+        none_tx_stanza = generate_reticulum_rnode_stanza(
+            site=site,
+            tx_power_dbm=None,
+            hop_limit=2,
+        )
+        assert "txpower = 22" in none_tx_stanza
+        assert "hop_limit = 2" in none_tx_stanza
 
 
 class TestSiteProvisioningAndDossierIntegration:
@@ -223,6 +286,78 @@ class TestSiteProvisioningAndDossierIntegration:
         assert p_ret.target == ProvisioningTarget.RETICULUM
         assert "[[RNode-VT-MANS-01]]" in p_ret.raw_url_or_text
         assert "<svg" in p_ret.inline_svg_qr
+        assert p_mt.tx_power_dbm is None and p_mt.hop_limit is None
+        assert p_mc.tx_power_dbm is None and p_mc.hop_limit is None
+        assert p_ret.tx_power_dbm is None and p_ret.hop_limit is None
+
+    def test_provisioning_payload_optional_fields_default_none(self) -> None:
+        payload = ProvisioningPayload(
+            target=ProvisioningTarget.MESHTASTIC,
+            site_id="VT-MANS-01",
+            channel_name="MeshScout",
+            frequency_mhz=915.0,
+            bandwidth_khz=250.0,
+            spreading_factor=11,
+            raw_url_or_text="https://meshtastic.org/e/#test",
+            cli_commands=["meshtastic --set device.role REPEATER"],
+            inline_svg_qr="<svg></svg>",
+        )
+        assert payload.tx_power_dbm is None
+        assert payload.hop_limit is None
+
+    def test_generate_site_provisioning_tx_power_and_hop_limit_forwarding(self) -> None:
+        site = _sample_site()
+
+        # Verify omitted defaults produce identical QR and CLI outputs to explicit None
+        p_mt_default = generate_site_provisioning(site, target=ProvisioningTarget.MESHTASTIC)
+        p_mc_default = generate_site_provisioning(site, target=ProvisioningTarget.MESHCORE)
+        p_ret_default = generate_site_provisioning(site, target=ProvisioningTarget.RETICULUM)
+
+        assert all("--set lora.tx_power" not in c and "--set lora.hop_limit" not in c for c in p_mt_default.cli_commands)
+        assert "--tx-power" not in p_mc_default.raw_url_or_text
+        assert "--hop-limit" not in p_mc_default.raw_url_or_text
+        assert "txpower = 22" in p_ret_default.raw_url_or_text
+        assert "hop_limit" not in p_ret_default.raw_url_or_text
+
+        # Meshtastic forwarding
+        p_mt = generate_site_provisioning(
+            site,
+            target=ProvisioningTarget.MESHTASTIC,
+            tx_power_dbm=28.0,
+            hop_limit=2,
+        )
+        assert p_mt.tx_power_dbm == 28.0
+        assert p_mt.hop_limit == 2
+        assert "--set lora.tx_power 28" in p_mt.cli_commands[0]
+        assert "--set lora.hop_limit 2" in p_mt.cli_commands[0]
+        assert p_mt.inline_svg_qr == p_mt_default.inline_svg_qr
+
+        # MeshCore forwarding
+        p_mc = generate_site_provisioning(
+            site,
+            target=ProvisioningTarget.MESHCORE,
+            tx_power_dbm=20.0,
+            hop_limit=3,
+        )
+        assert p_mc.tx_power_dbm == 20.0
+        assert p_mc.hop_limit == 3
+        assert "--tx-power 20" in p_mc.cli_commands[0]
+        assert "--hop-limit 3" in p_mc.cli_commands[0]
+        assert p_mc.raw_url_or_text == p_mc.cli_commands[0]
+        assert p_mc.inline_svg_qr == generate_qr_svg(p_mc.raw_url_or_text)
+
+        # Reticulum forwarding
+        p_ret = generate_site_provisioning(
+            site,
+            target=ProvisioningTarget.RETICULUM,
+            tx_power_dbm=17.0,
+            hop_limit=4,
+        )
+        assert p_ret.tx_power_dbm == 17.0
+        assert p_ret.hop_limit == 4
+        assert "txpower = 17" in p_ret.raw_url_or_text
+        assert "hop_limit = 4" in p_ret.raw_url_or_text
+        assert p_ret.inline_svg_qr == generate_qr_svg(p_ret.raw_url_or_text)
 
     def test_link_survey_html_embeds_provisioning_and_qr(self) -> None:
         s1 = _sample_site()

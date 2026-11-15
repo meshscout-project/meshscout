@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
-from meshscout.core.contracts import SiteCandidate, SiteType
+from meshscout.core.contracts import ReachabilityState, SiteCandidate, SiteType
 
 
 # ==============================================================================
@@ -83,6 +83,22 @@ class NodeRoleRecommendation(BaseModel):
     coordination_required: bool = Field(..., description="True if role demands regional frequency/site coordination")
     recommended_preset: Optional[str] = Field(default=None, description="Recommended modem preset (e.g. MediumFast)")
     recommended_hop_limit: int = Field(default=3, description="Recommended packet hop limit ceiling")
+    reachability_state: Optional[ReachabilityState] = Field(
+        default=None,
+        description="Resolved directional reachability state when provided or inferred",
+    )
+    downlink_margin_db: Optional[float] = Field(
+        default=None,
+        description="Directional tower-to-client downlink fade margin in dB",
+    )
+    uplink_margin_db: Optional[float] = Field(
+        default=None,
+        description="Directional client-to-tower uplink fade margin in dB",
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Directional asymmetry or operational hazard warnings",
+    )
 
 
 class BackhaulRecommendation(BaseModel):
@@ -95,6 +111,26 @@ class BackhaulRecommendation(BaseModel):
     required_vertical_isolation_m: float = Field(default=3.0, description="Required vertical antenna separation")
     estimated_isolation_db: float = Field(default=30.0, description="Estimated decoupling isolation in dB")
     notes: List[str] = Field(default_factory=list, description="Engineering deployment guidance")
+    reachability_state: Optional[ReachabilityState] = Field(
+        default=None,
+        description="Resolved directional reachability state for the inter-summit link",
+    )
+    downlink_margin_db: Optional[float] = Field(
+        default=None,
+        description="Forward (source -> target) fade margin in dB",
+    )
+    uplink_margin_db: Optional[float] = Field(
+        default=None,
+        description="Reverse (target -> source) fade margin in dB",
+    )
+    asymmetric_mitigation_required: bool = Field(
+        default=False,
+        description="True if directional link asymmetry or link budget deficit requires mitigation",
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Directional asymmetry or link failure warnings",
+    )
 
 
 # ==============================================================================
@@ -287,6 +323,108 @@ def forecast_channel_utilization(
     )
 
 
+def _validate_directional_margin(name: str, value: Optional[float]) -> Optional[float]:
+    """Validate optional directional fade margin is finite when provided."""
+    if value is None:
+        return None
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"{name} must be a finite number, got {value}")
+    return numeric
+
+
+def _coerce_reachability_state(value: ReachabilityState | str) -> ReachabilityState:
+    """Validate and normalize a ReachabilityState enum or string representation."""
+    if isinstance(value, ReachabilityState):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip()
+        for member in ReachabilityState:
+            if cleaned.lower() == member.value or cleaned.upper() == member.name:
+                return member
+    raise ValueError(
+        f"Invalid reachability_state {value!r}; expected one of {[m.value for m in ReachabilityState]}"
+    )
+
+
+def _resolve_reachability_state(
+    reachability_state: Optional[ReachabilityState],
+    downlink_margin_db: Optional[float],
+    uplink_margin_db: Optional[float],
+) -> Optional[ReachabilityState]:
+    """Resolve bidirectional ReachabilityState from explicit enum and/or directional margins.
+
+    Returns None when all directional inputs are omitted (preserving legacy symmetric mode).
+    """
+    if reachability_state is None and downlink_margin_db is None and uplink_margin_db is None:
+        return None
+
+    implied: Optional[ReachabilityState] = None
+    if downlink_margin_db is not None or uplink_margin_db is not None:
+        dl_ok = True if downlink_margin_db is None else (downlink_margin_db >= 0.0)
+        ul_ok = True if uplink_margin_db is None else (uplink_margin_db >= 0.0)
+        if dl_ok and ul_ok:
+            implied = ReachabilityState.TWO_WAY
+        elif dl_ok and not ul_ok:
+            implied = ReachabilityState.HEAR_ONLY_ALLIGATOR
+        elif ul_ok and not dl_ok:
+            implied = ReachabilityState.UPLINK_ONLY
+        else:
+            implied = ReachabilityState.UNREACHABLE
+
+    if reachability_state is None:
+        return implied
+
+    explicit = _coerce_reachability_state(reachability_state)
+    if explicit == ReachabilityState.TWO_WAY and implied is not None and implied != ReachabilityState.TWO_WAY:
+        return implied
+    return explicit
+
+
+def _format_margin_summary(
+    downlink_margin_db: Optional[float],
+    uplink_margin_db: Optional[float],
+) -> str:
+    """Format directional margin values for human-readable engineering rationale."""
+    parts: List[str] = []
+    if downlink_margin_db is not None:
+        parts.append(f"downlink={downlink_margin_db:+.1f} dB")
+    if uplink_margin_db is not None:
+        parts.append(f"uplink={uplink_margin_db:+.1f} dB")
+    if not parts:
+        return ""
+    return f" ({', '.join(parts)})"
+
+
+def _build_role_asymmetry_hazard(
+    state: ReachabilityState,
+    downlink_margin_db: Optional[float],
+    uplink_margin_db: Optional[float],
+) -> str:
+    """Generate Town-Killer hazard rationale for asymmetric or unreachable node links."""
+    margin_detail = _format_margin_summary(downlink_margin_db, uplink_margin_db)
+    if state == ReachabilityState.HEAR_ONLY_ALLIGATOR:
+        return (
+            f"TOWN_KILLER_RISK: Asymmetric HEAR_ONLY_ALLIGATOR reachability{margin_detail}. "
+            "Alligator site transmits strong downlink beacons that clients hear while failing to decode "
+            "client uplink packets, causing blackhole routing, hidden-node collisions, and retry storms. "
+            "Demoted from repeater/ROUTER role until bandpass cavity filter + LNA or TX power balance restores TWO_WAY closure."
+        )
+    if state == ReachabilityState.UPLINK_ONLY:
+        return (
+            f"TOWN_KILLER_RISK: Asymmetric UPLINK_ONLY reachability{margin_detail}. "
+            "Site receives client uplinks but fails to close the return downlink path, triggering "
+            "unacknowledged client retransmissions and wasted airtime. "
+            "Demoted from repeater/ROUTER role until feedline loss, antenna downtilt, or downlink EIRP is remediated."
+        )
+    return (
+        f"TOWN_KILLER_RISK: UNREACHABLE bidirectional link budget{margin_detail}. "
+        "Neither downlink nor uplink closes above receiver sensitivity. "
+        "Do not promote to repeater/ROUTER role; increase mast height, relocate to higher prominence, "
+        "or insert an intermediate relay hop."
+    )
+
+
 def advise_node_role(
     site: SiteCandidate,
     viewshed_area_sq_km: float = 0.0,
@@ -294,19 +432,39 @@ def advise_node_role(
     overlapping_router_count: int = 0,
     protocol_family: str = "Meshtastic",
     requested_role: Optional[str] = None,
+    reachability_state: Optional[ReachabilityState] = None,
+    downlink_margin_db: Optional[float] = None,
+    uplink_margin_db: Optional[float] = None,
 ) -> NodeRoleRecommendation:
-    """Recommend optimal network role and detect Town-Killer flood risks.
+    """Recommend optimal network role and detect Town-Killer flood and asymmetry risks.
 
     Invariants:
         1. Low-elevation / residential nodes requesting ROUTER role are demoted to CLIENT
            with town_killer_risk = True.
-        2. Prominent summit high sites with 0 overlapping routers get ROUTER role.
+        2. Prominent summit high sites with 0 overlapping routers get ROUTER role (when symmetric/TWO_WAY).
         3. Summit high sites with >= 2 overlapping routers get ROUTER_LATE role with
            town_killer_risk = True to prevent broadcast storm collapse.
         4. Summit high sites are NEVER recommended CLIENT_MUTE.
         5. High load environments (exposed pop >= 20,000 or viewshed >= 500 km^2) recommend
            faster preset MediumFast and lower hop limit (2).
+        6. Asymmetric or failed directional links (HEAR_ONLY_ALLIGATOR, UPLINK_ONLY, UNREACHABLE,
+           or negative directional margin) trigger town_killer_risk = True, surface hazard warnings,
+           and prevent blind promotion to ROUTER/repeater/transport roles.
     """
+    dl_margin = _validate_directional_margin("downlink_margin_db", downlink_margin_db)
+    ul_margin = _validate_directional_margin("uplink_margin_db", uplink_margin_db)
+    resolved_state = _resolve_reachability_state(reachability_state, dl_margin, ul_margin)
+    is_directional_hazard = resolved_state in (
+        ReachabilityState.HEAR_ONLY_ALLIGATOR,
+        ReachabilityState.UPLINK_ONLY,
+        ReachabilityState.UNREACHABLE,
+    )
+    warnings: List[str] = []
+    hazard_msg = ""
+    if is_directional_hazard and resolved_state is not None:
+        hazard_msg = _build_role_asymmetry_hazard(resolved_state, dl_margin, ul_margin)
+        warnings.append(hazard_msg)
+
     family = protocol_family.strip().lower()
 
     # Identify whether the site is a prominent summit or commercial tower
@@ -335,47 +493,55 @@ def advise_node_role(
     rec_hop_limit = 2 if is_high_load else 3
 
     if family in ("meshcore", "mesh_core"):
-        if is_summit and not is_residential_context:
+        if is_summit and not is_residential_context and not is_directional_hazard:
             role = MeshCoreRole.REPEATER.value
             coord = True
             cli = f"meshcore --set-role repeater --node '{site.name}'"
         else:
             role = MeshCoreRole.COMPANION.value
-            coord = False
+            coord = is_summit and not is_residential_context
             cli = f"meshcore --set-role companion --node '{site.name}'"
         return NodeRoleRecommendation(
             site_id=site.site_id,
             site_name=site.name,
             recommended_role=role,
             protocol_family=protocol_family,
-            town_killer_risk=False,
-            risk_message="",
+            town_killer_risk=is_directional_hazard,
+            risk_message=hazard_msg,
             cli_command=cli,
             coordination_required=coord,
             recommended_preset="default",
             recommended_hop_limit=rec_hop_limit,
+            reachability_state=resolved_state,
+            downlink_margin_db=dl_margin,
+            uplink_margin_db=ul_margin,
+            warnings=warnings,
         )
 
     elif family in ("reticulum", "rns"):
-        if is_summit and not is_residential_context:
+        if is_summit and not is_residential_context and not is_directional_hazard:
             role = ReticulumRole.TRANSPORT.value
             coord = True
             cli = f"rnsd --transport --interface-name '{site.name}'"
         else:
             role = ReticulumRole.ENDPOINT.value
-            coord = False
+            coord = is_summit and not is_residential_context
             cli = f"rnsd --no-transport --interface-name '{site.name}'"
         return NodeRoleRecommendation(
             site_id=site.site_id,
             site_name=site.name,
             recommended_role=role,
             protocol_family=protocol_family,
-            town_killer_risk=False,
-            risk_message="",
+            town_killer_risk=is_directional_hazard,
+            risk_message=hazard_msg,
             cli_command=cli,
             coordination_required=coord,
             recommended_preset="default",
             recommended_hop_limit=rec_hop_limit,
+            reachability_state=resolved_state,
+            downlink_margin_db=dl_margin,
+            uplink_margin_db=ul_margin,
+            warnings=warnings,
         )
 
     else:
@@ -387,18 +553,26 @@ def advise_node_role(
             if wants_router:
                 role = MeshtasticRole.CLIENT.value
                 risk = True
-                msg = (
+                res_msg = (
                     "TOWN_KILLER_RISK: Residential or low mast (<10m AGL) node configured as ROUTER "
                     "causes hidden-node packet starvation, unnecessary retransmissions, and ACK storms."
                 )
+                msg = f"{res_msg} {hazard_msg}".strip() if hazard_msg else res_msg
                 cli = f"meshtastic --set-owner {safe_name} --set device.role CLIENT"
                 coord = False
             else:
                 role = MeshtasticRole.CLIENT.value
-                risk = False
-                msg = ""
+                risk = is_directional_hazard
+                msg = hazard_msg
                 cli = f"meshtastic --set-owner {safe_name} --set device.role CLIENT"
                 coord = False
+        elif is_directional_hazard:
+            # Summit site with asymmetric alligator/one-way or unreachable link: do not blindly promote to ROUTER
+            role = MeshtasticRole.CLIENT.value
+            risk = True
+            msg = hazard_msg
+            cli = f"meshtastic --set-owner {safe_name} --set device.role CLIENT"
+            coord = True
         else:
             # Active summit repeater
             if overlapping_router_count == 0:
@@ -434,6 +608,10 @@ def advise_node_role(
             coordination_required=coord,
             recommended_preset=rec_preset,
             recommended_hop_limit=rec_hop_limit,
+            reachability_state=resolved_state,
+            downlink_margin_db=dl_margin,
+            uplink_margin_db=ul_margin,
+            warnings=warnings,
         )
 
 
@@ -443,9 +621,22 @@ def recommend_summit_backhaul(
     distance_km: float,
     line_of_sight: bool,
     channel_utilization_pct: float = 10.0,
+    downlink_margin_db: Optional[float] = None,
+    uplink_margin_db: Optional[float] = None,
+    reachability_state: Optional[ReachabilityState] = None,
 ) -> BackhaulRecommendation:
     """Recommend point-to-point backhaul topology between summit nodes."""
+    dl_margin = _validate_directional_margin("downlink_margin_db", downlink_margin_db)
+    ul_margin = _validate_directional_margin("uplink_margin_db", uplink_margin_db)
+    resolved_state = _resolve_reachability_state(reachability_state, dl_margin, ul_margin)
+    is_asymmetric_or_failed = resolved_state in (
+        ReachabilityState.HEAR_ONLY_ALLIGATOR,
+        ReachabilityState.UPLINK_ONLY,
+        ReachabilityState.UNREACHABLE,
+    )
+
     notes: List[str] = []
+    warnings: List[str] = []
 
     if channel_utilization_pct > 25.0:
         if line_of_sight:
@@ -463,6 +654,14 @@ def recommend_summit_backhaul(
                 "High congestion but microwave line of sight is obstructed. "
                 "Deploy cross-band dual-radio bridge (915 MHz client / 433 MHz transit)."
             )
+    elif is_asymmetric_or_failed and resolved_state is not None:
+        arch = BackhaulArchitecture.DUAL_RADIO_PI_BRIDGE
+        if resolved_state == ReachabilityState.HEAR_ONLY_ALLIGATOR:
+            split = "Dedicated directional backhaul bridge + bandpass cavity filter/LNA for uplink recovery"
+        elif resolved_state == ReachabilityState.UPLINK_ONLY:
+            split = "Dedicated directional backhaul bridge + downlink EIRP/filter remediation"
+        else:
+            split = "Cross-band / high-gain directional relay bridge (intermediate hop recommended)"
     elif channel_utilization_pct > 15.0 or distance_km > 35.0:
         arch = BackhaulArchitecture.DUAL_RADIO_PI_BRIDGE
         split = "Primary 915MHz access + secondary 915MHz dedicated backbone channel"
@@ -476,6 +675,40 @@ def recommend_summit_backhaul(
         notes.append(
             f"Low channel utilization ({channel_utilization_pct:.1f}%). Direct LoRa packet routing is viable."
         )
+
+    if resolved_state is not None:
+        margin_detail = _format_margin_summary(dl_margin, ul_margin)
+        if resolved_state == ReachabilityState.TWO_WAY:
+            notes.append(
+                f"Bidirectional TWO_WAY reachability verified{margin_detail}."
+            )
+        elif resolved_state == ReachabilityState.HEAR_ONLY_ALLIGATOR:
+            guidance = (
+                f"Asymmetric HEAR_ONLY_ALLIGATOR link detected{margin_detail}: forward downlink closes "
+                f"({site_a.site_id} -> {site_b.site_id}) while reverse uplink fails. "
+                "Avoid naive single-radio DIRECT_LORA; deploy directional Yagi backhaul antenna, "
+                "install bandpass cavity filter + LNA on the deaf receiver, and balance TX power."
+            )
+            notes.append(guidance)
+            warnings.append(guidance)
+        elif resolved_state == ReachabilityState.UPLINK_ONLY:
+            guidance = (
+                f"Asymmetric UPLINK_ONLY link detected{margin_detail}: reverse uplink closes "
+                f"({site_b.site_id} -> {site_a.site_id}) while forward downlink fails. "
+                "Avoid naive single-radio DIRECT_LORA; deploy directional Yagi backhaul bridge, "
+                "inspect source feedline/downtilt loss, and add bandpass cavity filter + LNA at the target site."
+            )
+            notes.append(guidance)
+            warnings.append(guidance)
+        elif resolved_state == ReachabilityState.UNREACHABLE:
+            guidance = (
+                f"Bidirectional UNREACHABLE link budget deficit{margin_detail}: neither forward nor reverse "
+                "LoRa path closes. Avoid naive DIRECT_LORA; insert an intermediate relay hop, deploy a "
+                "high-gain directional / cross-band dual-radio bridge, or transition to dedicated 5.8 GHz IP "
+                "microwave backhaul if clear line-of-sight is available."
+            )
+            notes.append(guidance)
+            warnings.append(guidance)
 
     iso_db = compute_antenna_isolation_db(vertical_sep_m=3.0, horizontal_sep_m=0.0)
     notes.append(
@@ -491,4 +724,9 @@ def recommend_summit_backhaul(
         required_vertical_isolation_m=3.0,
         estimated_isolation_db=round(iso_db, 1),
         notes=notes,
+        reachability_state=resolved_state,
+        downlink_margin_db=dl_margin,
+        uplink_margin_db=ul_margin,
+        asymmetric_mitigation_required=is_asymmetric_or_failed,
+        warnings=warnings,
     )

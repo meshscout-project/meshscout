@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any, Optional, Sequence, Tuple
 
+from meshscout.cli_tower_helpers import run_towers_subcommand
 from meshscout.core.contracts import Coordinate
 from meshscout.core.presets import CLIENT_ENVIRONMENT_PROFILES, build_radio_config
 from meshscout.core.registry import LivingMeshRegistry, evaluate_home_node_reach
@@ -1510,62 +1511,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             registry.close()
 
     if args.command == "towers":
-        from meshscout.adapters.source_fetch import fetch_source
-        from meshscout.adapters.tower_ingest import ingest_tower_source
-        from meshscout.core.tower_registry import UnifiedTowerRegistry
-
-        if args.towers_action == "ingest":
-            source_key = args.source or getattr(args, "pos_source", None)
-            if not source_key:
-                sys.stderr.write("Error: Must specify source ('fcc_asr', 'ised_sms', or 'civic').\n")
-                return 2
-
-            source_path = None
-            if args.path:
-                source_path = Path(args.path)
-            elif args.from_source:
-                try:
-                    source_path = fetch_source(source_key)
-                except Exception as exc:
-                    sys.stderr.write(f"Error fetching source '{source_key}': {exc}\n")
-                    return 1
-            else:
-                sys.stderr.write("Error: Must specify either --path/--input <PATH> or --from-source.\n")
-                return 2
-
-            if not source_path.exists():
-                sys.stderr.write(f"Error: Source file not found: {source_path}\n")
-                return 1
-
-            registry = UnifiedTowerRegistry(db_path=args.db_path)
-            try:
-                ingest_res = ingest_tower_source(
-                    registry=registry,
-                    source=source_key,
-                    path=source_path,
-                    region_code=args.region,
-                )
-                if getattr(args, "output_json", False):
-                    sys.stdout.write(json.dumps(ingest_res, indent=2) + "\n")
-                else:
-                    sys.stdout.write("============================================================\n")
-                    sys.stdout.write(f" Ingested {ingest_res['ingested_count']} towers from {source_key}\n")
-                    sys.stdout.write("============================================================\n")
-                    sys.stdout.write(" Breakdown by Region:\n")
-                    for reg, cnt in sorted(ingest_res.get("by_region", {}).items()):
-                        sys.stdout.write(f"   - {reg:<12}: {cnt:,} towers\n")
-                    tier_stats = ingest_res.get("by_friction_tier", {})
-                    sys.stdout.write(" Breakdown by Friction Tier:\n")
-                    sys.stdout.write(f"   - Tier 1 Civic:        {tier_stats.get('tier_1_civic', 0):,} towers\n")
-                    sys.stdout.write(f"   - Tier 2 Agricultural: {tier_stats.get('tier_2_agricultural', 0):,} towers\n")
-                    sys.stdout.write(f"   - Tier 3 Commercial:   {tier_stats.get('tier_3_commercial', 0):,} towers\n")
-                    sys.stdout.write("============================================================\n")
-                return 0
-            except Exception as exc:
-                sys.stderr.write(f"Error during tower ingestion: {exc}\n")
-                return 1
-            finally:
-                registry.close()
+        return run_towers_subcommand(args)
 
     if args.command == "packs":
         from meshscout.adapters.pack_builder import build_region_packs

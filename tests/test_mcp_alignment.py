@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 import pytest
 
+from meshscout.core.contracts import Coordinate, SiteCandidate, SiteType
+from meshscout.core.packs import PackSourceInfo, export_region_pack, install_region_pack
+from meshscout.core.tower_registry import UnifiedTowerRegistry
+from meshscout import mcp_server, mcp_tool_helpers
 from meshscout.mcp_server import (
     DOMAIN_CAPABILITY_MAP,
     MCP_PROMPTS_MANIFEST,
@@ -385,5 +389,176 @@ def test_dual_mode_link_reach_and_presets_alignment(tmp_path: Path) -> None:
     assert sample["reachability_state"] is not None
     assert sample["uplink_margin_db"] is not None
     assert sample["downlink_margin_db"] is not None
+
+
+def test_mcp_tool_helpers_reexport_and_advise_eirp_parity() -> None:
+    """Verify mcp_tool_helpers.advise_eirp re-export, domain/region resolution, fallback, and JSON-RPC parity."""
+    assert mcp_server.advise_eirp is mcp_tool_helpers.advise_eirp
+    assert mcp_server.list_region_packs is mcp_tool_helpers.list_region_packs
+
+    # 1. Explicit valid RegulatoryDomain enum string
+    explicit_ca = mcp_tool_helpers.advise_eirp(
+        tx_power_dbm=30.0,
+        antenna_gain_dbi=8.0,
+        cable_loss_db=1.2,
+        frequency_mhz=915.0,
+        domain="CA_ISED_RSS247",
+    )
+    assert explicit_ca["ok"] is True
+    assert explicit_ca["domain"] == "CA_ISED_RSS247"
+    assert explicit_ca["conducted_power_dbm"] == pytest.approx(28.8)
+    assert explicit_ca["eirp_dbm"] == pytest.approx(36.8)
+    assert explicit_ca["recommended_max_tx_dbm"] == pytest.approx(28.0)
+    assert len(explicit_ca["warnings"]) == 1
+
+    # 2. Non-enum domain string falling back to detect_regulatory_domain
+    domain_shorthand_ca = mcp_tool_helpers.advise_eirp(
+        tx_power_dbm=20.0,
+        antenna_gain_dbi=5.0,
+        domain="QC",
+    )
+    assert domain_shorthand_ca["ok"] is True
+    assert domain_shorthand_ca["domain"] == "CA_ISED_RSS247"
+    assert domain_shorthand_ca["warnings"] == []
+
+    domain_fallback_us = mcp_tool_helpers.advise_eirp(
+        tx_power_dbm=20.0,
+        antenna_gain_dbi=3.0,
+        domain="unrecognized_domain_token",
+    )
+    assert domain_fallback_us["ok"] is True
+    assert domain_fallback_us["domain"] == "US_FCC_PART15"
+
+    # 3. Region-based detection (Canadian province vs US region) and default fallback
+    region_ca = mcp_tool_helpers.advise_eirp(
+        tx_power_dbm=22.0,
+        antenna_gain_dbi=5.5,
+        region="CA-ON",
+    )
+    assert region_ca["domain"] == "CA_ISED_RSS247"
+
+    region_us = mcp_tool_helpers.advise_eirp(
+        tx_power_dbm=22.0,
+        antenna_gain_dbi=5.5,
+        region="vt_chittenden",
+    )
+    assert region_us["domain"] == "US_FCC_PART15"
+
+    default_us = mcp_tool_helpers.advise_eirp(
+        tx_power_dbm=20.0,
+        antenna_gain_dbi=3.0,
+    )
+    assert default_us["domain"] == "US_FCC_PART15"
+
+    # 4. JSON-RPC tools/call parity check
+    server = MeshScoutMCPServer()
+    rpc_resp = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 401,
+            "method": "tools/call",
+            "params": {
+                "name": "advise_eirp",
+                "arguments": {
+                    "tx_power_dbm": 30.0,
+                    "antenna_gain_dbi": 8.0,
+                    "cable_loss_db": 1.2,
+                    "frequency_mhz": 915.0,
+                    "domain": "CA_ISED_RSS247",
+                },
+            },
+        }
+    )
+    assert rpc_resp is not None
+    assert rpc_resp["result"]["isError"] is False
+    assert rpc_resp["result"]["structuredContent"] == explicit_ca
+
+
+def test_mcp_tool_helpers_list_region_packs_offline_and_parity(tmp_path: Path) -> None:
+    """Verify mcp_tool_helpers.list_region_packs offline against isolated tmp_path DB and JSON-RPC parity."""
+    target_db = tmp_path / "isolated_towers.db"
+
+    # 1. Empty isolated database with include_available=False (strictly offline)
+    empty_res = mcp_tool_helpers.list_region_packs(
+        db_path=str(target_db),
+        include_available=False,
+    )
+    assert empty_res["ok"] is True
+    assert empty_res["installed"] == []
+    assert empty_res["installed_count"] == 0
+    assert empty_res["available"] == []
+    assert empty_res["manifest_error"] is None
+    assert set(empty_res["attributions"].keys()) == {"fcc_asr", "ised_sms", "civic_osm"}
+
+    # 2. Export and install a local offline pack into target_db
+    source_db = tmp_path / "source_towers.db"
+    with UnifiedTowerRegistry(db_path=source_db) as src_reg:
+        src_reg.upsert_tower(
+            SiteCandidate(
+                site_id="VT-TEST-PACK-01",
+                name="Bolton Test Water Tower",
+                location=Coordinate(lat=44.37, lon=-72.88, elevation_m=320.0),
+                mast_height_m=18.0,
+                site_type=SiteType.WATER_TOWER,
+            ),
+            owner="Town of Bolton",
+            owner_category="civic",
+            source_dataset="fcc_asr",
+            region_code="VT",
+        )
+        pack_dir = tmp_path / "packs_out"
+        pack_info = export_region_pack(
+            registry=src_reg,
+            region_code="VT",
+            out_dir=pack_dir,
+            pack_version="1.2.0",
+            sources=[
+                PackSourceInfo(
+                    dataset="fcc_asr",
+                    license="Public Domain",
+                    attribution="FCC Antenna Structure Registration",
+                )
+            ],
+        )
+
+    archive_path = pack_dir / f"{pack_info.pack_id}-{pack_info.pack_version}.sqlite.gz"
+    with UnifiedTowerRegistry(db_path=target_db) as tgt_reg:
+        install_res = install_region_pack(
+            registry=tgt_reg,
+            pack_path=archive_path,
+            expected_sha256=pack_info.sha256,
+        )
+        assert install_res.ok
+
+    populated_res = mcp_tool_helpers.list_region_packs(
+        db_path=str(target_db),
+        include_available=False,
+    )
+    assert populated_res["ok"] is True
+    assert populated_res["installed_count"] == 1
+    assert len(populated_res["installed"]) == 1
+    assert populated_res["installed"][0]["pack_id"] == "towers-vt"
+    assert populated_res["installed"][0]["region_code"] == "VT"
+    assert populated_res["installed"][0]["pack_version"] == "1.2.0"
+    assert populated_res["available"] == []
+    assert populated_res["manifest_error"] is None
+
+    # 3. JSON-RPC tools/call parity check via MeshScoutMCPServer(db_path=...)
+    server = MeshScoutMCPServer(db_path=str(target_db))
+    rpc_resp = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 402,
+            "method": "tools/call",
+            "params": {
+                "name": "list_region_packs",
+                "arguments": {"include_available": False},
+            },
+        }
+    )
+    assert rpc_resp is not None
+    assert rpc_resp["result"]["isError"] is False
+    assert rpc_resp["result"]["structuredContent"] == populated_res
+
 
 

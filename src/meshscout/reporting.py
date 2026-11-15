@@ -3,16 +3,48 @@
 from __future__ import annotations
 
 import html
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from meshscout.core.contracts import (
     Coordinate,
     LinkBudgetResult,
     RadioConfig,
+    ReachabilityState,
     SiteCandidate,
 )
 from meshscout.core.optimizer import SetCoverOptimizationResult
 from meshscout.core.scorer import SiteViabilityScore, score_site_viability
+
+
+def _has_asymmetric_fields(link: LinkBudgetResult) -> bool:
+    """Return True when any optional asymmetric directional field is populated."""
+    return any(
+        val is not None
+        for val in (
+            link.downlink_rx_dbm,
+            link.downlink_margin_db,
+            link.uplink_rx_dbm,
+            link.uplink_margin_db,
+            link.asymmetry_delta_db,
+            link.reachability_state,
+        )
+    )
+
+
+def _reachability_value(link: LinkBudgetResult) -> Optional[str]:
+    """Return the string value of ReachabilityState when present, else None."""
+    if link.reachability_state is None:
+        return None
+    if isinstance(link.reachability_state, ReachabilityState):
+        return link.reachability_state.value
+    return str(link.reachability_state)
+
+
+def _fmt_optional_float(val: Optional[float], fmt: str = ".1f", suffix: str = "") -> str:
+    """Format an optional float with fmt and suffix, returning 'N/A' when None."""
+    if val is None:
+        return "N/A"
+    return f"{format(val, fmt)}{suffix}"
 
 
 def export_geojson_feature_collection(
@@ -98,6 +130,12 @@ def export_geojson_feature_collection(
                     "link_margin_db": link.link_margin_db,
                     "has_line_of_sight": link.has_line_of_sight,
                     "fresnel_clearance_ratio": link.fresnel_clearance_ratio,
+                    "downlink_rx_dbm": link.downlink_rx_dbm,
+                    "downlink_margin_db": link.downlink_margin_db,
+                    "uplink_rx_dbm": link.uplink_rx_dbm,
+                    "uplink_margin_db": link.uplink_margin_db,
+                    "asymmetry_delta_db": link.asymmetry_delta_db,
+                    "reachability_state": _reachability_value(link),
                 },
             }
         )
@@ -190,17 +228,43 @@ def generate_deployment_dossier_markdown(
     lines.append("## 4. Point-to-Point Backhaul Link Budget Summary")
     lines.append("")
     if links:
-        lines.append(
-            "| Source | Target | Distance (km) | Path Loss (dB) | RX Power (dBm) | Link Margin (dB) | LOS | Fresnel Ratio |"
-        )
-        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
-        for lk in links:
-            los_str = "CLEAR" if lk.has_line_of_sight else "OBSTRUCTED"
+        has_asymmetric = any(_has_asymmetric_fields(lk) for lk in links)
+        if has_asymmetric:
             lines.append(
-                f"| `{lk.source_id}` | `{lk.target_id}` | {lk.distance_km:.2f} | "
-                f"{lk.total_path_loss_db:.1f} | {lk.rx_power_dbm:.1f} | "
-                f"{lk.link_margin_db:.1f} | {los_str} | {lk.fresnel_clearance_ratio:.2f} |"
+                "| Source | Target | Distance (km) | Path Loss (dB) | RX Power (dBm) | Link Margin (dB) | "
+                "Downlink RX (dBm) | Downlink Margin (dB) | Uplink RX (dBm) | Uplink Margin (dB) | "
+                "Asymmetry Delta (dB) | Reachability | LOS | Fresnel Ratio |"
             )
+            lines.append(
+                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
+            )
+            for lk in links:
+                los_str = "CLEAR" if lk.has_line_of_sight else "OBSTRUCTED"
+                dl_rx = _fmt_optional_float(lk.downlink_rx_dbm, ".1f")
+                dl_margin = _fmt_optional_float(lk.downlink_margin_db, "+.1f")
+                ul_rx = _fmt_optional_float(lk.uplink_rx_dbm, ".1f")
+                ul_margin = _fmt_optional_float(lk.uplink_margin_db, "+.1f")
+                asym_delta = _fmt_optional_float(lk.asymmetry_delta_db, "+.1f")
+                reach_raw = _reachability_value(lk)
+                reach_str = f"`{reach_raw}`" if reach_raw is not None else "N/A"
+                lines.append(
+                    f"| `{lk.source_id}` | `{lk.target_id}` | {lk.distance_km:.2f} | "
+                    f"{lk.total_path_loss_db:.1f} | {lk.rx_power_dbm:.1f} | "
+                    f"{lk.link_margin_db:.1f} | {dl_rx} | {dl_margin} | {ul_rx} | {ul_margin} | "
+                    f"{asym_delta} | {reach_str} | {los_str} | {lk.fresnel_clearance_ratio:.2f} |"
+                )
+        else:
+            lines.append(
+                "| Source | Target | Distance (km) | Path Loss (dB) | RX Power (dBm) | Link Margin (dB) | LOS | Fresnel Ratio |"
+            )
+            lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+            for lk in links:
+                los_str = "CLEAR" if lk.has_line_of_sight else "OBSTRUCTED"
+                lines.append(
+                    f"| `{lk.source_id}` | `{lk.target_id}` | {lk.distance_km:.2f} | "
+                    f"{lk.total_path_loss_db:.1f} | {lk.rx_power_dbm:.1f} | "
+                    f"{lk.link_margin_db:.1f} | {los_str} | {lk.fresnel_clearance_ratio:.2f} |"
+                )
     else:
         lines.append("No point-to-point backhaul links were evaluated for this run.")
     lines.append("")
@@ -555,6 +619,59 @@ def generate_link_survey_html(
     ret_stanza = html.escape(prov_ret.raw_url_or_text)
     qr_svg = prov_mt.inline_svg_qr
 
+    asymmetric_html = ""
+    if _has_asymmetric_fields(link):
+        dl_rx_str = _fmt_optional_float(link.downlink_rx_dbm, ".1f", " dBm")
+        dl_m_str = _fmt_optional_float(link.downlink_margin_db, "+.1f", " dB")
+        ul_rx_str = _fmt_optional_float(link.uplink_rx_dbm, ".1f", " dBm")
+        ul_m_str = _fmt_optional_float(link.uplink_margin_db, "+.1f", " dB")
+        asym_str = _fmt_optional_float(link.asymmetry_delta_db, "+.1f", " dB")
+        reach_raw = _reachability_value(link)
+        if reach_raw is not None:
+            reach_escaped = html.escape(reach_raw)
+            reach_upper = html.escape(reach_raw.upper())
+            reach_color = (
+                "#15803d"
+                if link.reachability_state == ReachabilityState.TWO_WAY
+                else (
+                    "#b45309"
+                    if link.reachability_state
+                    in (ReachabilityState.HEAR_ONLY_ALLIGATOR, ReachabilityState.UPLINK_ONLY)
+                    else "#b91c1c"
+                )
+            )
+            reach_cell = (
+                f'<strong style="color:{reach_color};">{reach_upper}</strong> '
+                f'(<code>{reach_escaped}</code>)'
+            )
+        else:
+            reach_cell = "N/A"
+
+        asymmetric_html = f"""
+  <table class="rf-summary-table">
+    <thead>
+      <tr>
+        <th>Downlink RX ({src_id} &rarr; {tgt_id})</th>
+        <th>Downlink Margin</th>
+        <th>Uplink RX ({tgt_id} &rarr; {src_id})</th>
+        <th>Uplink Margin</th>
+        <th>Asymmetry Delta</th>
+        <th>Reachability State</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{dl_rx_str}</td>
+        <td><strong>{dl_m_str}</strong></td>
+        <td>{ul_rx_str}</td>
+        <td><strong>{ul_m_str}</strong></td>
+        <td>{asym_str}</td>
+        <td>{reach_cell}</td>
+      </tr>
+    </tbody>
+  </table>
+"""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -781,7 +898,7 @@ def generate_link_survey_html(
       </tr>
     </tbody>
   </table>
-
+{asymmetric_html}
   <div class="grid-2">
     <div class="node-box">
       <h4>Fresnel &amp; Downtilt Alignment</h4>
@@ -912,6 +1029,7 @@ def generate_portable_workbench_html(
         )
     sites_tbody = "\n".join(site_rows) if site_rows else "<tr><td colspan='9'>No sites registered.</td></tr>"
 
+    has_asymmetric_links = any(_has_asymmetric_fields(lk) for lk in links)
     link_rows: List[str] = []
     for lk in links:
         los_badge = (
@@ -919,6 +1037,34 @@ def generate_portable_workbench_html(
             if lk.has_line_of_sight
             else "<span class='badge badge-warn'>OBSTRUCTED</span>"
         )
+        asym_cells = ""
+        if has_asymmetric_links:
+            dl_rx_cell = _fmt_optional_float(lk.downlink_rx_dbm, ".1f", " dBm")
+            dl_m_cell = _fmt_optional_float(lk.downlink_margin_db, "+.1f", " dB")
+            ul_rx_cell = _fmt_optional_float(lk.uplink_rx_dbm, ".1f", " dBm")
+            ul_m_cell = _fmt_optional_float(lk.uplink_margin_db, "+.1f", " dB")
+            asym_cell = _fmt_optional_float(lk.asymmetry_delta_db, "+.1f", " dB")
+            reach_raw = _reachability_value(lk)
+            if reach_raw is not None:
+                reach_cls = (
+                    "badge-active"
+                    if lk.reachability_state == ReachabilityState.TWO_WAY
+                    else "badge-warn"
+                )
+                reach_cell = (
+                    f"<span class='badge {reach_cls}'>{html.escape(reach_raw.upper())}</span> "
+                    f"<code>{html.escape(reach_raw)}</code>"
+                )
+            else:
+                reach_cell = "N/A"
+            asym_cells = (
+                f"<td>{dl_rx_cell}</td>"
+                f"<td>{dl_m_cell}</td>"
+                f"<td>{ul_rx_cell}</td>"
+                f"<td>{ul_m_cell}</td>"
+                f"<td>{asym_cell}</td>"
+                f"<td>{reach_cell}</td>"
+            )
         link_rows.append(
             "<tr>"
             f"<td><code>{html.escape(lk.source_id)}</code></td>"
@@ -927,10 +1073,21 @@ def generate_portable_workbench_html(
             f"<td>{lk.total_path_loss_db:.1f} dB</td>"
             f"<td>{lk.rx_power_dbm:.1f} dBm</td>"
             f"<td>{lk.link_margin_db:.1f} dB</td>"
+            f"{asym_cells}"
             f"<td>{los_badge}</td>"
             f"<td>{lk.fresnel_clearance_ratio:.2f}</td>"
             "</tr>"
         )
+    links_thead_asym = (
+        "\n          <th>Downlink RX</th>"
+        "\n          <th>Downlink Margin</th>"
+        "\n          <th>Uplink RX</th>"
+        "\n          <th>Uplink Margin</th>"
+        "\n          <th>Asymmetry Delta</th>"
+        "\n          <th>Reachability</th>"
+        if has_asymmetric_links
+        else ""
+    )
     links_tbody = "\n".join(link_rows) if link_rows else "<tr><td colspan='8'>No point-to-point RF links evaluated.</td></tr>"
 
     home_block = ""
@@ -1092,7 +1249,7 @@ def generate_portable_workbench_html(
           <th>Distance</th>
           <th>Path Loss</th>
           <th>RX Power</th>
-          <th>Link Margin</th>
+          <th>Link Margin</th>{links_thead_asym}
           <th>Line of Sight</th>
           <th>Fresnel Ratio</th>
         </tr>
