@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "traps": [
+    {
+      "trap_id": "TRAP-GEN-001",
+      "domain": "vcs-hygiene",
+      "title": "Unresolved Git Merge Conflict Marker",
+      "trigger_pattern": "^(?:<{7}|>{7}|\\|{7})\\s+\\S+",
+      "forbidden_claim_or_action": "Leaving unresolved git merge conflict markers in source, configuration, or documentation files.",
+      "remediation_atom": "Resolve all merge conflict branches completely and run git diff --check before committing.",
+      "source_trace": "stigmerig:starter-pack:generic",
+      "source_traces": [
+        "stigmerig:starter-pack:generic"
+      ],
+      "occurrences": 1,
+      "status": "promoted",
+      "target_globs": [
+        "**",
+        "!tests/**",
+        "!**/tests/**"
+      ],
+      "fixtures": {
+        "positive": "<<<<<<< HEAD\nconst port = 8080;\n=======\nconst port = 9090;\n>>>>>>> main",
+        "negative": "Summary\n=======\nconst port = 8080;"
+      },
+      "promoted_at": "2026-11-16"
+    }
+  ]
+}
