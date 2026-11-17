@@ -10,13 +10,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from meshscout import commands
 from meshscout.adapters.pack_client import PackClient
 from meshscout.core.packs import list_installed_packs as core_list_installed_packs
-from meshscout.core.regulatory import (
-    RegulatoryDomain,
-    advise_eirp as core_advise_eirp,
-    detect_regulatory_domain,
-)
+from meshscout.core.regulatory import RegulatoryDomain
 from meshscout.core.tower_registry import UnifiedTowerRegistry
 
 DEFAULT_PACK_ATTRIBUTIONS: Dict[str, str] = {
@@ -31,14 +28,7 @@ def resolve_regulatory_domain(
     region: Optional[str] = None,
 ) -> RegulatoryDomain:
     """Resolve regulatory domain from explicit enum/code string or region identifier."""
-    if domain:
-        try:
-            return RegulatoryDomain(domain)
-        except ValueError:
-            return detect_regulatory_domain(domain)
-    if region:
-        return detect_regulatory_domain(region)
-    return RegulatoryDomain.US_FCC_PART15
+    return commands.resolve_regulatory_domain(domain=domain, region=region)
 
 
 def build_region_packs_payload(
@@ -66,17 +56,14 @@ def advise_eirp(
     region: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Evaluate transmitter conducted power and EIRP limits against FCC Part 15.247 / ISED RSS-247 rules."""
-    reg_domain = resolve_regulatory_domain(domain=domain, region=region)
-    report = core_advise_eirp(
-        tx_power_dbm=float(tx_power_dbm),
-        antenna_gain_dbi=float(antenna_gain_dbi),
-        cable_loss_db=float(cable_loss_db),
-        frequency_mhz=float(frequency_mhz),
-        domain=reg_domain,
+    return commands.advise_eirp(
+        tx_power_dbm=tx_power_dbm,
+        antenna_gain_dbi=antenna_gain_dbi,
+        cable_loss_db=cable_loss_db,
+        frequency_mhz=frequency_mhz,
+        domain=domain,
+        region=region,
     )
-    res = report.model_dump(mode="json")
-    res["ok"] = True
-    return res
 
 
 def list_region_packs(

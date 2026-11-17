@@ -12,32 +12,13 @@ import uuid
 
 from pydantic import BaseModel, Field
 
-try:
-    from meshscout.core.models import (  # type: ignore
-        AccessDifficulty,
-        Coordinate,
-        SiteCandidate,
-        SiteType,
-    )
-except ImportError:
-    from meshscout.core.contracts import (
-        AccessDifficulty,
-        Coordinate,
-        SiteCandidate,
-        SiteType,
-    )
-
-try:
-    from meshscout.core.itm import _synthetic_vermont_elevation_fn  # type: ignore
-except ImportError:
-    try:
-        from meshscout.adapters.elevation import _synthetic_vermont_elevation_fn
-    except ImportError:
-        def _synthetic_vermont_elevation_fn(lat: float, lon: float) -> float:
-            east_progress = max(0.0, min(1.0, (lon - (-73.30)) / 0.50))
-            valley_base = 65.0 + 180.0 * (east_progress ** 1.6)
-            ridge_bonus = 950.0 * max(0.0, 1.0 - abs(lon - (-72.8143)) / 0.12) ** 2
-            return round(valley_base + ridge_bonus, 2)
+from meshscout.adapters.elevation import _synthetic_vermont_elevation_fn
+from meshscout.core.contracts import (
+    AccessDifficulty,
+    Coordinate,
+    SiteCandidate,
+    SiteType,
+)
 
 
 class AdHocPin(BaseModel):

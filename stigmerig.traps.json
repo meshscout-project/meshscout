@@ -24,6 +24,140 @@
         "negative": "Summary\n=======\nconst port = 8080;"
       },
       "promoted_at": "2026-11-16"
+    },
+    {
+      "trap_id": "TRAP-PY-001",
+      "domain": "python-hygiene",
+      "title": "Silent Broad Exception Pass",
+      "trigger_pattern": "^([ \\t]*)except\\s+(?:Exception|BaseException)(?:\\s+as\\s+[A-Za-z_]\\w*)?\\s*:(?:[ \\t]*pass\\b|[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n\\1[ \\t]+pass\\b)",
+      "forbidden_claim_or_action": "Swallowing broad Exception or BaseException blocks with a silent pass statement.",
+      "remediation_atom": "Catch narrow exception tuples (such as OSError or ValueError) and handle or log failures explicitly per ruff S110.",
+      "source_trace": "stigmerig:starter-pack:python",
+      "source_traces": [
+        "stigmerig:starter-pack:python"
+      ],
+      "occurrences": 1,
+      "status": "promoted",
+      "target_globs": [
+        "**/*.py",
+        "**/*.pyi",
+        "!tests/**",
+        "!**/tests/**",
+        "!**/__tests__/**",
+        "!**/test_*.py",
+        "!**/*_test.*",
+        "!**/*.test.*",
+        "!**/*.spec.*"
+      ],
+      "fixtures": {
+        "positive": "def read_cfg():\n    try:\n        return load()\n    except Exception:\n        pass",
+        "negative": "def read_cfg():\n    try:\n        return load()\n    except (OSError, ValueError) as exc:\n        logger.warning('cfg error: %s', exc)"
+      },
+      "match_mode": "multiline",
+      "promoted_at": "2026-11-17"
+    },
+    {
+      "trap_id": "TRAP-PY-002",
+      "domain": "python-hygiene",
+      "title": "Unscoped Type Ignore Comment",
+      "trigger_pattern": "#\\s*type:\\s*ignore(?!\\s*\\x5b[A-Za-z0-9_,\\s-]+\\x5d)",
+      "forbidden_claim_or_action": "Using bare # type: ignore comments without scoping the specific error code in brackets.",
+      "remediation_atom": "Resolve the static type mismatch or scope the suppression to an explicit code like # type: ignore[attr-defined] per mypy ignore-without-code and ruff PGH003.",
+      "source_trace": "stigmerig:starter-pack:python",
+      "source_traces": [
+        "stigmerig:starter-pack:python"
+      ],
+      "occurrences": 1,
+      "status": "promoted",
+      "target_globs": [
+        "**/*.py",
+        "**/*.pyi",
+        "!tests/**",
+        "!**/tests/**",
+        "!**/__tests__/**",
+        "!**/test_*.py",
+        "!**/*_test.*",
+        "!**/*.test.*",
+        "!**/*.spec.*"
+      ],
+      "fixtures": {
+        "positive": "result = dynamic_dispatch(payload)  # type: ignore",
+        "negative": "result = dynamic_dispatch(payload)  # type: ignore[no-any-return]"
+      },
+      "promoted_at": "2026-11-17"
+    },
+    {
+      "trap_id": "TRAP-TS-001",
+      "domain": "typescript-hygiene",
+      "title": "Unjustified TypeScript Directive Suppression",
+      "trigger_pattern": "//\\s*@ts-(?:ignore|nocheck)\\b(?![ \\t]*(?::|--|-)?[ \\t]*[A-Za-z0-9_]{3,})",
+      "forbidden_claim_or_action": "Suppressing TypeScript compiler diagnostics with bare // @ts-ignore or // @ts-nocheck without an inline rationale.",
+      "remediation_atom": "Fix the type error or replace with @ts-expect-error followed by a root-cause rationale per @typescript-eslint/ban-ts-comment.",
+      "source_trace": "stigmerig:starter-pack:typescript",
+      "source_traces": [
+        "stigmerig:starter-pack:typescript"
+      ],
+      "occurrences": 1,
+      "status": "promoted",
+      "target_globs": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.mjs",
+        "**/*.cjs",
+        "**/*.svelte",
+        "**/*.vue",
+        "!tests/**",
+        "!**/tests/**",
+        "!**/__tests__/**",
+        "!**/test_*.py",
+        "!**/*_test.*",
+        "!**/*.test.*",
+        "!**/*.spec.*"
+      ],
+      "fixtures": {
+        "positive": "// @ts-ignore\nconst unsafeVal: number = rawInput;",
+        "negative": "// @ts-ignore -- vendor typedef omits optional signal parameter\nconst unsafeVal: number = rawInput;"
+      },
+      "promoted_at": "2026-11-17"
+    },
+    {
+      "trap_id": "TRAP-TS-002",
+      "domain": "typescript-hygiene",
+      "title": "Empty Promise Catch Handler",
+      "trigger_pattern": "\\.catch\\(\\s*(?:(?:async\\s+)?(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*=>|function\\s*\\([^)]*\\))\\s*\\{\\s*\\}\\s*\\)",
+      "forbidden_claim_or_action": "Swallowing rejected promises with an empty .catch(() => {}) callback.",
+      "remediation_atom": "Log diagnostic context, return a typed fallback value, or rethrow inside promise catch handlers per @typescript-eslint/no-empty-function.",
+      "source_trace": "stigmerig:starter-pack:typescript",
+      "source_traces": [
+        "stigmerig:starter-pack:typescript"
+      ],
+      "occurrences": 1,
+      "status": "promoted",
+      "target_globs": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.mjs",
+        "**/*.cjs",
+        "**/*.svelte",
+        "**/*.vue",
+        "!tests/**",
+        "!**/tests/**",
+        "!**/__tests__/**",
+        "!**/test_*.py",
+        "!**/*_test.*",
+        "!**/*.test.*",
+        "!**/*.spec.*"
+      ],
+      "fixtures": {
+        "positive": "await syncRemoteState().catch(() => {});",
+        "negative": "await syncRemoteState().catch((err) => { console.error('sync failed', err); throw err; });"
+      },
+      "match_mode": "multiline",
+      "promoted_at": "2026-11-17"
     }
   ]
 }

@@ -26,21 +26,13 @@ from meshscout.core.itm import evaluate_point_to_point_link
 from meshscout.core.presets import get_site_noise_penalty_db
 from meshscout.core.viewshed import (
     VALID_DIRECTIONS,
+    _synthetic_vermont_elevation_fn as _synthetic_vermont_elevation_fn,
     compute_radial_viewshed_polygon,
     haversine_distance_km,
 )
 
 # Physical geodesy constant for 4/3 Earth curvature refraction
 EFFECTIVE_EARTH_RADIUS_M: float = 6371000.0 * (4.0 / 3.0)
-
-
-def _synthetic_vermont_elevation_fn(lat: float, lon: float) -> float:
-    """Forwarder to deduplicated synthetic Vermont elevation model in elevation adapter."""
-    global _synthetic_vermont_elevation_fn
-    from meshscout.adapters.elevation import _synthetic_vermont_elevation_fn as _fn
-
-    _synthetic_vermont_elevation_fn = _fn
-    return _fn(lat, lon)
 
 
 def _point_in_polygon(lon: float, lat: float, poly: Sequence[Sequence[float]]) -> bool:

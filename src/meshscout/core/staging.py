@@ -15,10 +15,10 @@ import shutil
 import sqlite3
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from meshscout.adapters.elevation import get_required_hgt_tiles_for_bounds
 from meshscout.adapters.regions import resolve_regional_bounds
 from meshscout.core.contracts import RegionalBounds, Result
 from meshscout.core.registry import LivingMeshRegistry
+from meshscout.core.viewshed import get_required_hgt_tiles_for_bounds
 
 # Minimal 1x1 transparent PNG payload used for synthetic tile caching
 SAMPLE_TILE_PNG = (

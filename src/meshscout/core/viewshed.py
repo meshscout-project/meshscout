@@ -84,6 +84,52 @@ def haversine_distance_km(c1: Coordinate, c2: Coordinate) -> float:
     return EARTH_RADIUS_KM * c
 
 
+def format_hgt_tile_filename(lat: float, lon: float) -> str:
+    """Resolve standard 1-degree SRTM HGT tile filename from coordinates."""
+    lat_dir = "N" if lat >= 0 else "S"
+    lon_dir = "E" if lon >= 0 else "W"
+    return f"{lat_dir}{abs(math.floor(lat)):02d}{lon_dir}{abs(math.floor(lon)):03d}.hgt"
+
+
+def _synthetic_vermont_elevation_fn(lat: float, lon: float) -> float:
+    """Deterministic topographic model of the Champlain Valley and Green Mountains.
+
+    Models Lake Champlain basin (~60-120m in the west near -73.25) rising toward the
+    Green Mountain spine (~800-1300m in the east near -72.81).
+    """
+    # West-to-east rise toward Green Mountain ridge (-72.81)
+    east_progress = max(0.0, min(1.0, (lon - (-73.30)) / 0.50))
+    valley_base = 65.0 + 180.0 * (east_progress ** 1.6)
+    ridge_bonus = 950.0 * max(0.0, 1.0 - abs(lon - (-72.8143)) / 0.12) ** 2
+    return round(valley_base + ridge_bonus, 2)
+
+
+def get_required_hgt_tiles_for_bounds(bounds: RegionalBounds) -> List[str]:
+    """Calculate the required standard 1x1 degree SRTM HGT tile filenames for regional bounds.
+
+    Each 1x1 degree tile NyyWxxx covers [yy, yy+1) in latitude and [-xxx, -xxx+1) in longitude
+    (or [-xxx-1, -xxx) in west convention).
+    For an integer-aligned 2x3 degree box (e.g. lat 43.0 to 45.0, lon -74.0 to -71.0),
+    it covers latitudes 43 and 44, longitudes -74, -73, and -72, yielding exactly 6 tiles.
+    """
+    lat_min = int(math.floor(bounds.min_lat))
+    lat_max = int(math.ceil(bounds.max_lat))
+    if lat_max <= lat_min:
+        lat_max = lat_min + 1
+
+    lon_min = int(math.floor(bounds.min_lon))
+    lon_max = int(math.ceil(bounds.max_lon))
+    if lon_max <= lon_min:
+        lon_max = lon_min + 1
+
+    tiles: List[str] = []
+    for lat_floor in range(lat_min, lat_max):
+        for lon_floor in range(lon_min, lon_max):
+            tiles.append(format_hgt_tile_filename(lat_floor, lon_floor))
+
+    return sorted(list(set(tiles)))
+
+
 def generate_target_grid(
     bounds: RegionalBounds,
     lat_steps: int = 5,

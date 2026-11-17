@@ -39,17 +39,33 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from meshscout.adapters.elevation import ElevationGrid, USGS3DEPElevationAdapter
-from meshscout.adapters.fcc_asr import FCCASRAdapter
 from meshscout.adapters.geodata import VERMONT_REFERENCE_TOWNS_DATA
 from meshscout.adapters.mqtt import (
     analyze_unobserved_areas,
     ingest_mqtt_packets,
     load_mqtt_fixture,
 )
-from meshscout.adapters.vt_vcgi import VCGIRegionalAdapter
+from meshscout.adapters.vt_counties import (
+    VT_14_COUNTIES_FIXTURE,
+    list_vermont_counties,
+    load_county_candidates,
+)
+from meshscout.commands import (
+    FCC_ASR_FIXTURE as FCC_ASR_FIXTURE,
+    FIXTURES_DIR as FIXTURES_DIR,
+    VERMONT_STATE_BOUNDS as VERMONT_STATE_BOUNDS,
+    VT_CHITTENDEN_BOUNDS as VT_CHITTENDEN_BOUNDS,
+    VT_CHITTENDEN_FIXTURE as VT_CHITTENDEN_FIXTURE,
+    VT_VCGI_FIXTURE as VT_VCGI_FIXTURE,
+    _build_offline_elevation_adapter as _build_offline_elevation_adapter,
+    _resolve_site_by_id as _resolve_site_by_id,
+    evaluate_link_budget as evaluate_link_budget,
+    inspect_site_feasibility as inspect_site_feasibility,
+    load_regional_fixtures as load_regional_fixtures,
+    scout_repeater_sites as scout_repeater_sites,
+)
 from meshscout.core.archetypes import (
     COMMUNITY_SITE_ARCHETYPES,
     SiteArchetype,
@@ -58,14 +74,9 @@ from meshscout.core.archetypes import (
 )
 from meshscout.core.contracts import (
     Coordinate,
-    RadioConfig,
     RegionalBounds,
-    SiteCandidate,
-    SiteType,
 )
 from meshscout.core.fresnel import analyze_fresnel_clearance, haversine_distance_km
-from meshscout.core.itm import evaluate_point_to_point_link
-from meshscout.core.optimizer import solve_minimum_set_cover
 from meshscout.core.presets import (
     CLIENT_ENVIRONMENT_PROFILES,
     HARDWARE_PRESETS,
@@ -80,15 +91,9 @@ from meshscout.core.provisioning import (
 from meshscout.core.registry import (
     DeploymentStatus,
     LivingMeshRegistry,
-    RegisteredNode,
-    WorkspacePreferences,
     evaluate_home_node_reach,
 )
-from meshscout.core.scorer import (
-    EmitterSpec,
-    rank_candidate_sites,
-    score_site_viability,
-)
+from meshscout.core.scorer import score_site_viability
 from meshscout.core.solar import (
     BatteryChemistry,
     SolarSetup,
@@ -105,578 +110,13 @@ from meshscout.core.traffic import (
     recommend_summit_backhaul,
 )
 from meshscout.core.viewshed import (
-    ViewshedResult,
-    compute_viewshed,
-    generate_target_grid,
+    _synthetic_vermont_elevation_fn as _synthetic_vermont_elevation_fn,
 )
 from meshscout.mcp_tool_helpers import (
     advise_eirp as advise_eirp,
     list_region_packs as list_region_packs,
 )
 from meshscout.reporting import generate_landowner_pitch_html
-
-FIXTURES_DIR = Path(__file__).resolve().parent.parent.parent / "fixtures"
-VT_CHITTENDEN_FIXTURE = FIXTURES_DIR / "vt_chittenden_sample.json"
-VT_VCGI_FIXTURE = FIXTURES_DIR / "vt_vcgi_sample.json"
-FCC_ASR_FIXTURE = FIXTURES_DIR / "fcc_asr_vt_sample.dat"
-
-VT_CHITTENDEN_BOUNDS = RegionalBounds(
-    name="Vermont_Chittenden_County",
-    min_lat=44.25,
-    max_lat=44.60,
-    min_lon=-73.35,
-    max_lon=-72.75,
-)
-
-VERMONT_STATE_BOUNDS = RegionalBounds(
-    name="Vermont_Statewide",
-    min_lat=42.72,
-    max_lat=45.02,
-    min_lon=-73.44,
-    max_lon=-71.46,
-)
-
-
-def _synthetic_vermont_elevation_fn(lat: float, lon: float) -> float:
-    """Deterministic topographic model of the Champlain Valley and Green Mountains.
-
-    Models Lake Champlain basin (~60-120m in the west near -73.25) rising toward the
-    Green Mountain spine (~800-1300m in the east near -72.81).
-    """
-    # West-to-east rise toward Green Mountain ridge (-72.81)
-    east_progress = max(0.0, min(1.0, (lon - (-73.30)) / 0.50))
-    valley_base = 65.0 + 180.0 * (east_progress ** 1.6)
-    ridge_bonus = 950.0 * max(0.0, 1.0 - abs(lon - (-72.8143)) / 0.12) ** 2
-    return round(valley_base + ridge_bonus, 2)
-
-
-def _build_offline_elevation_adapter(bounds: RegionalBounds) -> USGS3DEPElevationAdapter:
-    """Create an offline USGS3DEPElevationAdapter backed by a deterministic ElevationGrid."""
-    grid = ElevationGrid.from_fn(
-        bounds=bounds,
-        rows=25,
-        cols=25,
-        fn=_synthetic_vermont_elevation_fn,
-    )
-    return USGS3DEPElevationAdapter(
-        bounds=bounds,
-        offline_grid=grid,
-        offline_mode=True,
-    )
-
-
-def load_regional_fixtures(
-    region: str = "vt_chittenden",
-) -> Tuple[RegionalBounds, List[SiteCandidate]]:
-    """Load and deduplicate offline regional SiteCandidates from bundled fixtures."""
-    region_key = region.strip().lower()
-    clean = region_key.removeprefix("vt_").removesuffix("_county").removesuffix(" county").strip()
-    if region_key not in ("vt_chittenden", "chittenden", "all", "vt_statewide", "vermont", "vt", "*"):
-        from meshscout.adapters.vt_counties import (
-            VERMONT_COUNTY_BOUNDS,
-            load_regional_fixtures as load_county_fixtures,
-        )
-        if any(c.lower() == clean or c.lower() == region_key for c in VERMONT_COUNTY_BOUNDS):
-            return load_county_fixtures(region)
-
-    if region_key in ("vt_statewide", "vermont", "vt", "all", "*"):
-        bounds = VERMONT_STATE_BOUNDS
-    else:
-        bounds = VT_CHITTENDEN_BOUNDS
-
-    by_id: Dict[str, SiteCandidate] = {}
-
-    # 1. Load primary Chittenden sample fixture
-    if VT_CHITTENDEN_FIXTURE.exists():
-        raw_chit = json.loads(VT_CHITTENDEN_FIXTURE.read_text(encoding="utf-8"))
-        for item in raw_chit.get("sites", []):
-            site = SiteCandidate.model_validate(item)
-            if bounds.contains(site.location):
-                by_id[site.site_id] = site
-
-    # 2. Load VCGI municipal & state infrastructure fixture
-    vcgi_adapter = VCGIRegionalAdapter(
-        bounds=bounds,
-        fixture_path=VT_VCGI_FIXTURE,
-        offline_mode=True,
-    )
-    vcgi_res = vcgi_adapter.fetch_sites(bounds=bounds)
-    if vcgi_res.ok and vcgi_res.value:
-        for site in vcgi_res.value:
-            by_id.setdefault(site.site_id, site)
-
-    # 3. Load FCC ASR registered antenna structures fixture
-    asr_adapter = FCCASRAdapter(
-        bounds=bounds,
-        fixture_path=FCC_ASR_FIXTURE,
-        offline_mode=True,
-    )
-    asr_res = asr_adapter.fetch_sites(bounds=bounds)
-    if asr_res.ok and asr_res.value:
-        for site in asr_res.value:
-            by_id.setdefault(site.site_id, site)
-
-    # 4. Load 14 Vermont county highpoint candidates if statewide
-    if bounds == VERMONT_STATE_BOUNDS:
-        try:
-            from meshscout.adapters.vt_counties import load_county_candidates
-            county_res = load_county_candidates("all")
-            if county_res.ok and county_res.value:
-                for site in county_res.value:
-                    by_id.setdefault(site.site_id, site)
-        except Exception:
-            pass
-
-    return bounds, list(by_id.values())
-
-
-# Import county candidate adapter after load_regional_fixtures definition to support dynamic patching
-from meshscout.adapters.vt_counties import (  # noqa: E402
-    VT_14_COUNTIES_FIXTURE,
-    list_vermont_counties,
-    load_county_candidates,
-)
-
-
-def _resolve_site_by_id(site_id: str) -> Optional[SiteCandidate]:
-    """Resolve a SiteCandidate by ID across statewide regional fixtures and county candidates."""
-    clean_id = site_id.strip().upper()
-    _, all_sites = load_regional_fixtures(region="vt_statewide")
-    for s in all_sites:
-        if s.site_id.strip().upper() == clean_id:
-            return s
-    try:
-        county_res = load_county_candidates("all")
-        if county_res.ok and county_res.value:
-            for s in county_res.value:
-                if s.site_id.strip().upper() == clean_id:
-                    return s
-    except Exception:
-        pass
-
-    # Well-known fallback for Mount Mansfield
-    if clean_id in ("VT-MANS-01", "VT-MANSFIELD-01", "MANSFIELD"):
-        return SiteCandidate(
-            site_id="VT-MANS-01",
-            name="Mount Mansfield Summit Ridge",
-            location=Coordinate(lat=44.5437, lon=-72.8143, elevation_m=1339.0),
-            site_type=SiteType.MOUNTAIN_PEAK,
-            mast_height_m=10.0,
-        )
-    return None
-
-
-def scout_repeater_sites(
-    region: str = "vt_chittenden",
-    min_coverage: float = 0.90,
-    max_repeaters: int = 5,
-    no_delay: bool = True,
-) -> Dict[str, Any]:
-    """Scout, optimize, and rank optimal repeater sites for a region using offline fixtures."""
-    bounds, candidates = load_regional_fixtures(region=region)
-    if not candidates:
-        return {
-            "ok": False,
-            "error": {
-                "code": "NO_CANDIDATE_SITES",
-                "message": f"No candidate sites found for region '{region}'.",
-            },
-        }
-
-    grid_res = generate_target_grid(
-        bounds=bounds,
-        lat_steps=4,
-        lon_steps=4,
-        elevation_fn=lambda lat, lon: 95.0,
-        rx_height_m=2.0,
-    )
-    if not grid_res.ok or not grid_res.value:
-        return {
-            "ok": False,
-            "error": {
-                "code": "GRID_GENERATION_FAILED",
-                "message": grid_res.error.message if grid_res.error else "Target grid generation failed",
-            },
-        }
-    targets = grid_res.value
-
-    viewsheds: List[ViewshedResult] = []
-    coverage_by_site: Dict[str, float] = {}
-    radio = RadioConfig(frequency_mhz=915.0, tx_power_dbm=20.0)
-
-    for site in candidates:
-        vs_res = compute_viewshed(
-            repeater=site,
-            targets=targets,
-            radio=radio,
-            min_margin_db=6.0,
-            require_los=False,
-            num_samples=12,
-        )
-        if vs_res.ok and vs_res.value is not None:
-            viewsheds.append(vs_res.value)
-            coverage_by_site[site.site_id] = vs_res.value.weighted_coverage_fraction
-
-    opt_res = solve_minimum_set_cover(
-        viewsheds=viewsheds,
-        target_coverage_fraction=min_coverage,
-        max_repeaters=max_repeaters,
-    )
-    if not opt_res.ok or opt_res.value is None:
-        return {
-            "ok": False,
-            "error": {
-                "code": opt_res.error.code if opt_res.error else "OPTIMIZATION_FAILED",
-                "message": opt_res.error.message if opt_res.error else "Set-cover optimization failed",
-            },
-        }
-
-    rank_res = rank_candidate_sites(
-        sites=candidates,
-        coverage_by_site=coverage_by_site,
-    )
-    ranked_scores = rank_res.value if (rank_res.ok and rank_res.value) else []
-    score_lookup = {s.site.site_id: s for s in ranked_scores}
-
-    opt = opt_res.value
-    selected_summary = []
-    for step in opt.selection_steps:
-        viability = score_lookup.get(step.site.site_id)
-        selected_summary.append(
-            {
-                "step": step.step,
-                "site_id": step.site.site_id,
-                "name": step.site.name,
-                "site_type": step.site.site_type.value,
-                "elevation_m": step.site.location.elevation_m,
-                "mast_height_m": step.site.mast_height_m,
-                "deployment_cost": step.cost,
-                "newly_covered_targets": len(step.newly_covered_target_ids),
-                "cumulative_coverage_fraction": step.cumulative_coverage_fraction,
-                "viability_score": viability.composite_score if viability else None,
-                "desense_risk": viability.desense_risk.value if viability else None,
-                "requires_cavity_filter": viability.requires_cavity_filter if viability else None,
-            }
-        )
-
-    return {
-        "ok": True,
-        "region": bounds.name,
-        "no_delay": no_delay,
-        "total_candidates_evaluated": len(candidates),
-        "total_target_points": opt.total_targets,
-        "target_coverage_threshold": opt.target_coverage_threshold,
-        "achieved_coverage_fraction": opt.achieved_coverage_fraction,
-        "achieved_weighted_coverage_fraction": opt.achieved_weighted_coverage_fraction,
-        "threshold_met": opt.threshold_met,
-        "total_deployment_cost": opt.total_cost,
-        "selected_repeaters": selected_summary,
-        "top_ranked_sites": [
-            {
-                "site_id": s.site.site_id,
-                "name": s.site.name,
-                "site_type": s.site.site_type.value,
-                "composite_score": s.composite_score,
-                "access_and_ownership_score": s.access_and_ownership_score,
-                "rf_cleanliness_score": s.rf_cleanliness_score,
-                "desense_risk": s.desense_risk.value,
-                "requires_cavity_filter": s.requires_cavity_filter,
-                "coverage_fraction": coverage_by_site.get(s.site.site_id, 0.0),
-            }
-            for s in ranked_scores[:10]
-        ],
-    }
-
-
-def evaluate_link_budget(
-    source_lat: float,
-    source_lon: float,
-    source_elev_m: float,
-    target_lat: float,
-    target_lon: float,
-    target_elev_m: float,
-    frequency_mhz: float = 915.0,
-    tx_power_dbm: float = 20.0,
-    source_mast_m: float = 10.0,
-    target_mast_m: float = 5.0,
-    evaluation_mode: Optional[str] = None,
-    source_preset: Optional[str] = None,
-    target_preset: Optional[str] = None,
-    client_env: Optional[str] = None,
-    protocol_profile: str = "MESHTASTIC_LONGFAST",
-    season_profile: str = "SUMMER_FOLIAGE",
-    source_noise_penalty_db: float = 0.0,
-    target_noise_penalty_db: float = 0.0,
-) -> Dict[str, Any]:
-    """Evaluate point-to-point Fresnel clearance and Longley-Rice ITM link budget offline."""
-    is_dual_mode = (
-        evaluation_mode is not None
-        or source_preset is not None
-        or target_preset is not None
-        or client_env is not None
-        or source_noise_penalty_db != 0.0
-        or target_noise_penalty_db != 0.0
-    )
-
-    mode_norm: Optional[str] = None
-    eff_source_preset: Optional[str] = None
-    eff_target_preset: Optional[str] = None
-    eff_env_key: Optional[str] = None
-    client_env_loss_db: float = 0.0
-    source_radio: Optional[RadioConfig] = None
-    target_radio: Optional[RadioConfig] = None
-
-    if is_dual_mode:
-        mode_norm = evaluation_mode.strip().lower() if evaluation_mode is not None else "client"
-        if mode_norm not in ("client", "backhaul"):
-            return {
-                "ok": False,
-                "error": {
-                    "code": "INVALID_EVALUATION_MODE",
-                    "message": (
-                        f"Unsupported evaluation_mode '{evaluation_mode}'. "
-                        "Must be 'client' or 'backhaul'."
-                    ),
-                },
-            }
-
-        if client_env is not None:
-            env_key = client_env.strip().upper()
-            if env_key not in CLIENT_ENVIRONMENT_PROFILES:
-                return {
-                    "ok": False,
-                    "error": {
-                        "code": "UNKNOWN_CLIENT_ENV",
-                        "message": (
-                            f"Unknown client_env '{client_env}'. "
-                            f"Available: {sorted(CLIENT_ENVIRONMENT_PROFILES.keys())}"
-                        ),
-                    },
-                }
-        else:
-            env_key = "OUTDOOR_CLEAR"
-
-        if mode_norm == "backhaul":
-            client_env_loss_db = 0.0
-            eff_env_key = None
-            eff_source_preset = (source_preset or "STATION_G2_BACKBONE").strip().upper()
-            eff_target_preset = (target_preset or "RAK4631_SOLAR").strip().upper()
-        else:
-            eff_env_key = env_key
-            client_env_loss_db = CLIENT_ENVIRONMENT_PROFILES[env_key].clutter_loss_db
-            eff_source_preset = (source_preset or "STATION_G2_BACKBONE").strip().upper()
-            eff_target_preset = (target_preset or "SENSECAP_T1000E").strip().upper()
-
-        src_res = build_radio_config(
-            hardware_id=eff_source_preset,
-            protocol_id=protocol_profile,
-            season_id=season_profile,
-        )
-        if not src_res.ok or src_res.value is None:
-            return {
-                "ok": False,
-                "error": {
-                    "code": src_res.error.code if src_res.error else "RADIO_CONFIG_ERROR",
-                    "message": (
-                        src_res.error.message
-                        if src_res.error
-                        else "Failed to build source radio configuration."
-                    ),
-                },
-            }
-
-        tgt_res = build_radio_config(
-            hardware_id=eff_target_preset,
-            protocol_id=protocol_profile,
-            season_id=season_profile,
-        )
-        if not tgt_res.ok or tgt_res.value is None:
-            return {
-                "ok": False,
-                "error": {
-                    "code": tgt_res.error.code if tgt_res.error else "RADIO_CONFIG_ERROR",
-                    "message": (
-                        tgt_res.error.message
-                        if tgt_res.error
-                        else "Failed to build target radio configuration."
-                    ),
-                },
-            }
-
-        source_radio = src_res.value
-        target_radio = tgt_res.value
-
-    source_site = SiteCandidate(
-        site_id="SOURCE-NODE",
-        name="Source Node",
-        location=Coordinate(lat=source_lat, lon=source_lon, elevation_m=source_elev_m),
-        site_type=SiteType.CUSTOM,
-        mast_height_m=source_mast_m,
-    )
-    target_site = SiteCandidate(
-        site_id="TARGET-NODE",
-        name="Target Node",
-        location=Coordinate(lat=target_lat, lon=target_lon, elevation_m=target_elev_m),
-        site_type=SiteType.CUSTOM,
-        mast_height_m=target_mast_m,
-    )
-
-    min_lat = min(source_lat, target_lat) - 0.05
-    max_lat = max(source_lat, target_lat) + 0.05
-    min_lon = min(source_lon, target_lon) - 0.05
-    max_lon = max(source_lon, target_lon) + 0.05
-    bounds = RegionalBounds(
-        name="Link_Transect_Bounds",
-        min_lat=max(-90.0, min_lat),
-        max_lat=min(90.0, max_lat),
-        min_lon=max(-180.0, min_lon),
-        max_lon=min(180.0, max_lon),
-    )
-
-    elev_adapter = _build_offline_elevation_adapter(bounds=bounds)
-    prof_res = elev_adapter.get_elevation_profile(
-        source=source_site,
-        target=target_site,
-        num_samples=25,
-    )
-    if not prof_res.ok or prof_res.value is None:
-        return {
-            "ok": False,
-            "error": {
-                "code": prof_res.error.code if prof_res.error else "PROFILE_ERROR",
-                "message": prof_res.error.message if prof_res.error else "Failed to generate elevation profile",
-            },
-        }
-    profile = prof_res.value
-
-    if not is_dual_mode:
-        fresnel_res = analyze_fresnel_clearance(
-            profile=profile,
-            frequency_mhz=frequency_mhz,
-        )
-        radio = RadioConfig(frequency_mhz=frequency_mhz, tx_power_dbm=tx_power_dbm)
-        itm_res = evaluate_point_to_point_link(
-            profile=profile,
-            radio=radio,
-        )
-    else:
-        assert source_radio is not None and target_radio is not None
-        fresnel_res = analyze_fresnel_clearance(
-            profile=profile,
-            frequency_mhz=source_radio.frequency_mhz,
-        )
-        itm_res = evaluate_point_to_point_link(
-            profile=profile,
-            radio=source_radio,
-            target_radio=target_radio,
-            source_noise_penalty_db=float(source_noise_penalty_db),
-            target_noise_penalty_db=float(target_noise_penalty_db),
-            client_env_loss_db=client_env_loss_db,
-        )
-
-    if not fresnel_res.ok or fresnel_res.value is None:
-        return {
-            "ok": False,
-            "error": {
-                "code": fresnel_res.error.code if fresnel_res.error else "FRESNEL_ERROR",
-                "message": fresnel_res.error.message if fresnel_res.error else "Fresnel analysis failed",
-            },
-        }
-    if not itm_res.ok or itm_res.value is None:
-        return {
-            "ok": False,
-            "error": {
-                "code": itm_res.error.code if itm_res.error else "ITM_ERROR",
-                "message": itm_res.error.message if itm_res.error else "ITM link budget failed",
-            },
-        }
-
-    fresnel = fresnel_res.value
-    link = itm_res.value
-
-    fresnel_dict = {
-        "total_distance_m": fresnel.total_distance_m,
-        "frequency_mhz": fresnel.frequency_mhz,
-        "has_line_of_sight": fresnel.has_line_of_sight,
-        "fresnel_60pct_clear": fresnel.fresnel_60pct_clear,
-        "min_clearance_m": round(fresnel.min_clearance_m, 3),
-        "min_clearance_ratio": round(fresnel.min_clearance_ratio, 4),
-        "max_knife_edge_nu": round(fresnel.max_knife_edge_nu, 4),
-    }
-
-    if not is_dual_mode:
-        return {
-            "ok": True,
-            "link_budget": link.model_dump(mode="json"),
-            "fresnel_analysis": fresnel_dict,
-        }
-
-    return {
-        "ok": True,
-        "evaluation_mode": mode_norm,
-        "source_preset": eff_source_preset,
-        "target_preset": eff_target_preset,
-        "client_env": eff_env_key,
-        "client_env_loss_db": client_env_loss_db,
-        "protocol_profile": protocol_profile.strip().upper(),
-        "season_profile": season_profile.strip().upper(),
-        "link_budget": link.model_dump(mode="json"),
-        "fresnel_analysis": fresnel_dict,
-    }
-
-
-def inspect_site_feasibility(
-    site_id: str,
-    nearby_850_900mhz_erp_watts: float = 0.0,
-) -> Dict[str, Any]:
-    """Inspect a candidate site's co-location RF desense risk, ownership score, and hardware guidance."""
-    target_site = _resolve_site_by_id(site_id)
-    if target_site is None:
-        return {
-            "ok": False,
-            "error": {
-                "code": "SITE_NOT_FOUND",
-                "message": f"Site ID '{site_id}' was not found in bundled regional fixtures.",
-            },
-        }
-
-    emitters: List[EmitterSpec] = []
-    if nearby_850_900mhz_erp_watts > 0.0:
-        emitters.append(
-            EmitterSpec(
-                emitter_id=f"CO-LOC-{target_site.site_id}",
-                location=Coordinate(
-                    lat=target_site.location.lat + 0.0002,
-                    lon=target_site.location.lon + 0.0002,
-                    elevation_m=target_site.location.elevation_m,
-                ),
-                frequency_mhz=880.0,
-                erp_watts=nearby_850_900mhz_erp_watts,
-                service_type="cellular",
-            )
-        )
-
-    score_res = score_site_viability(
-        site=target_site,
-        nearby_emitters=emitters,
-    )
-    if not score_res.ok or score_res.value is None:
-        return {
-            "ok": False,
-            "error": {
-                "code": score_res.error.code if score_res.error else "VIABILITY_SCORE_ERROR",
-                "message": score_res.error.message if score_res.error else "Failed scoring site feasibility",
-            },
-        }
-
-    viability = score_res.value
-    return {
-        "ok": True,
-        "site_id": target_site.site_id,
-        "name": target_site.name,
-        "site_type": target_site.site_type.value,
-        "viability": viability.model_dump(),
-    }
 
 
 def advise_node_role_and_airtime(
@@ -1244,7 +684,6 @@ def stage_offline_field_kit(
 ) -> Dict[str, Any]:
     """Stage a turnkey offline cartography field kit or calculate dry-run storage estimates."""
     from meshscout.core.staging import stage_offline_region
-    from pathlib import Path
 
     out_dir = Path(output_dir) if output_dir else Path.home() / ".meshscout" / "field-kit"
     res = stage_offline_region(
@@ -2692,7 +2131,7 @@ def verify_domain_mcp_coverage(
 def create_fastmcp_app(host: str = "127.0.0.1", port: int = 8000) -> Any:
     """Create a FastMCP application instance if the `mcp` package is installed."""
     try:
-        from mcp.server.fastmcp import FastMCP  # type: ignore
+        from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found]
 
         try:
             mcp = FastMCP("meshscout", host=host, port=port)

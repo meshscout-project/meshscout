@@ -6,13 +6,10 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query
 
+from meshscout import commands
 from meshscout.adapters.regions import list_north_america_regions
 from meshscout.adapters.source_fetch import load_source_catalog
-from meshscout.core.regulatory import (
-    RegulatoryDomain,
-    advise_eirp as core_advise_eirp,
-    detect_regulatory_domain,
-)
+from meshscout.core.regulatory import RegulatoryDomain
 
 
 def build_attribution_payload(sources: Dict[str, Any]) -> Dict[str, Any]:
@@ -38,17 +35,7 @@ def resolve_regulatory_domain(
     region: Optional[str] = None,
 ) -> RegulatoryDomain:
     """Resolve the active regulatory domain from an explicit enum value or region fallback."""
-    if domain:
-        try:
-            return RegulatoryDomain(domain)
-        except ValueError:
-            detected_from_domain = detect_regulatory_domain(domain)
-            if detected_from_domain != RegulatoryDomain.US_FCC_PART15 or not region:
-                return detected_from_domain
-            return detect_regulatory_domain(region)
-    if region:
-        return detect_regulatory_domain(region)
-    return RegulatoryDomain.US_FCC_PART15
+    return commands.resolve_regulatory_domain(domain=domain, region=region)
 
 
 def evaluate_regulatory_eirp_payload(
@@ -60,17 +47,14 @@ def evaluate_regulatory_eirp_payload(
     region: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Evaluate conducted power and EIRP compliance and return a JSON-ready payload."""
-    reg_domain = resolve_regulatory_domain(domain=domain, region=region)
-    report = core_advise_eirp(
+    return commands.advise_eirp(
         tx_power_dbm=tx_power_dbm,
         antenna_gain_dbi=antenna_gain_dbi,
         cable_loss_db=cable_loss_db,
         frequency_mhz=frequency_mhz,
-        domain=reg_domain,
+        domain=domain,
+        region=region,
     )
-    res = report.model_dump(mode="json")
-    res["ok"] = True
-    return res
 
 
 def build_regulatory_router() -> APIRouter:

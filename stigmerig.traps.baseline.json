@@ -1,0 +1,89 @@
+{
+  "entries": [
+    {
+      "count": 6,
+      "file": "src/meshscout/adapters/drives.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 4,
+      "file": "src/meshscout/adapters/elevation.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 1,
+      "file": "src/meshscout/adapters/mbtiles.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 2,
+      "file": "src/meshscout/adapters/mqtt_live.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 1,
+      "file": "src/meshscout/adapters/pack_builder.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 3,
+      "file": "src/meshscout/adapters/pack_client.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 1,
+      "file": "src/meshscout/adapters/source_fetch.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 2,
+      "file": "src/meshscout/adapters/telemetry_cache.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 1,
+      "file": "src/meshscout/adapters/vt_vcgi.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 2,
+      "file": "src/meshscout/core/packs.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 4,
+      "file": "src/meshscout/core/staging.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 3,
+      "file": "src/meshscout/core/tower_registry.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 1,
+      "file": "src/meshscout/mcp_server.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    },
+    {
+      "count": 14,
+      "file": "src/meshscout/web/app.py",
+      "snippet_sha256": "a2ad58d9f50d074d9f20ff296f2fadaa02d0c20ec2151c9f5182f16e8a173354",
+      "trap_id": "TRAP-PY-001"
+    }
+  ],
+  "version": "1.0.0"
+}

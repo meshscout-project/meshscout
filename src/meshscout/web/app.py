@@ -180,12 +180,12 @@ from meshscout.core.viewshed import (
     compute_viewshed,
     generate_target_grid,
 )
-from meshscout.mcp_server import (
+from meshscout.commands import (
     VT_CHITTENDEN_BOUNDS,
     _build_offline_elevation_adapter,
-    _synthetic_vermont_elevation_fn,
     load_regional_fixtures,
 )
+from meshscout.core.viewshed import _synthetic_vermont_elevation_fn
 from meshscout.web.regulatory_routes import build_regulatory_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -4561,7 +4561,7 @@ def create_web_app(
         exposed_population: int = Query(5000, description="Estimated exposed population"),
     ) -> Dict[str, Any]:
         """Classify a site candidate into its community archetype and return validated cross-protocol guidance."""
-        from meshscout.mcp_server import _resolve_site_by_id
+        from meshscout.commands import _resolve_site_by_id
         site = _resolve_site_by_id(site_id)
         if not site:
             reg = LivingMeshRegistry(db_path=getattr(app.state, "db_path", None))

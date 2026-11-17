@@ -230,28 +230,17 @@ def load_regional_fixtures(
 ) -> Tuple[RegionalBounds, List[SiteCandidate]]:
     """Load regional bounds and candidates for any Vermont county, statewide, or default region.
 
-    Seamlessly integrates with `mcp_server.load_regional_fixtures`, supporting county
-    names (e.g. 'rutland', 'washington', 'lamoille', 'windham'), 'all', or 'vt_statewide'.
+    Supports county names (e.g. 'rutland', 'washington', 'lamoille', 'windham'),
+    'all', or 'vt_statewide'.
     """
     region_key = region.strip().lower()
     clean_key = region_key.removeprefix("vt_").removesuffix("_county").removesuffix(" county").strip()
 
-    # 1. Statewide check (merging county candidates with core fixtures if present)
+    # 1. Statewide check
     if region_key in ("all", "vt_statewide", "vermont", "vt", "*"):
         bounds = VERMONT_STATE_BOUNDS
         res = load_county_candidates("all")
         candidates = res.value if res.ok and res.value else []
-        try:
-            import meshscout.mcp_server as _mcp_ref
-            orig_fn = getattr(_mcp_ref, "_orig_load_regional_fixtures", None)
-            if orig_fn:
-                _, orig_sites = orig_fn("vt_statewide")
-                by_id = {s.site_id: s for s in orig_sites}
-                for s in candidates:
-                    by_id.setdefault(s.site_id, s)
-                candidates = list(by_id.values())
-        except Exception:
-            pass
         return bounds, candidates
 
     # 2. County check against 14 Vermont counties
@@ -265,15 +254,7 @@ def load_regional_fixtures(
         candidates = res.value if res.ok and res.value else []
         return bounds, candidates
 
-    # 3. Default fallback (e.g. vt_chittenden or other legacy identifiers)
-    try:
-        import meshscout.mcp_server as _mcp_ref
-        orig_fn = getattr(_mcp_ref, "_orig_load_regional_fixtures", None)
-        if orig_fn:
-            return orig_fn(region)
-    except Exception:
-        pass
-
+    # 3. Default fallback (Chittenden County)
     bounds = VERMONT_COUNTY_BOUNDS.get("Chittenden", VERMONT_STATE_BOUNDS)
     res = load_county_candidates("Chittenden")
     candidates = res.value if res.ok and res.value else []

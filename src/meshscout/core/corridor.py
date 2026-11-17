@@ -12,7 +12,6 @@ import math
 from typing import Callable, Dict, List, Optional, Sequence
 from pydantic import BaseModel, Field
 
-from meshscout.core.composite_viewshed import _synthetic_vermont_elevation_fn
 from meshscout.core.contracts import (
     Coordinate,
     ElevationPoint,
@@ -25,7 +24,10 @@ from meshscout.core.contracts import (
 )
 from meshscout.core.itm import evaluate_point_to_point_link
 from meshscout.core.presets import get_site_noise_penalty_db
-from meshscout.core.viewshed import haversine_distance_km
+from meshscout.core.viewshed import (
+    _synthetic_vermont_elevation_fn,
+    haversine_distance_km,
+)
 
 
 class CorridorHopResult(BaseModel):

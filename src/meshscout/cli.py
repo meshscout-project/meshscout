@@ -17,14 +17,16 @@ from meshscout.cli_tower_helpers import run_towers_subcommand
 from meshscout.core.contracts import Coordinate
 from meshscout.core.presets import CLIENT_ENVIRONMENT_PROFILES, build_radio_config
 from meshscout.core.registry import LivingMeshRegistry, evaluate_home_node_reach
-from meshscout.mcp_server import (
-    MeshScoutMCPServer,
-    _synthetic_vermont_elevation_fn,
-    create_fastmcp_app,
+from meshscout.commands import (
     evaluate_link_budget,
     inspect_site_feasibility,
     load_regional_fixtures,
     scout_repeater_sites,
+)
+from meshscout.core.viewshed import _synthetic_vermont_elevation_fn
+from meshscout.mcp_server import (
+    MeshScoutMCPServer,
+    create_fastmcp_app,
 )
 
 
@@ -53,9 +55,9 @@ def create_fallback_sse_app(
         from starlette.routing import Route
     except ImportError:
         try:
-            from fastapi import FastAPI as Starlette, Request  # type: ignore
-            from fastapi.responses import Response, StreamingResponse  # type: ignore
-            from starlette.routing import Route  # type: ignore
+            from fastapi import FastAPI as Starlette, Request  # type: ignore[import-not-found,no-redef]
+            from fastapi.responses import Response, StreamingResponse  # type: ignore[import-not-found,no-redef]
+            from starlette.routing import Route  # type: ignore[import-not-found,no-redef]
         except ImportError as exc:
             raise ImportError(
                 "Fallback SSE server requires 'starlette' or 'fastapi' and 'uvicorn' installed."
