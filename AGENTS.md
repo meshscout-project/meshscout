@@ -1,6 +1,6 @@
 # AGENTS
 
-<!-- stigmerig:begin sha256=4df4862bb92adb92 -->
+<!-- stigmerig:begin sha256=5ab2b5da11af1288 -->
 ## Autonomous Operation Invariants
 
 1. **Local-First Stigmergy**: Agents coordinate indirectly through `.stigmerig` task state and filesystem artifacts.
@@ -13,5 +13,5 @@
 
 1. Query available tasks via `stigmerig task list --status todo`.
 2. Claim a task with lease TTL via `stigmerig task claim --id <id> --agent <agent>`.
-3. Scan traps via `stigmerig traps scan` and complete verification via `stigmerig task done --id <id> --agent <agent> --verifier <verifier> --evidence <path>`.
+3. Scan traps via `stigmerig traps scan` and complete verification via `stigmerig task done --id <id> --agent <agent> --verifier <verifier> --evidence <path>` (pass `--model <model>` or `STIGMERIG_MODEL` for lineage).
 <!-- stigmerig:end -->

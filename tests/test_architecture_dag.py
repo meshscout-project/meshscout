@@ -433,7 +433,16 @@ def test_polyglot_trap_ratchet_zero_regression() -> None:
         if isinstance(t, dict) and t.get("status") == "promoted"
     ]
     promoted_ids = {str(t.get("trap_id")) for t in promoted_traps}
-    expected_ids = {"TRAP-GEN-001", "TRAP-PY-001", "TRAP-PY-002", "TRAP-TS-001", "TRAP-TS-002"}
+    expected_ids = {
+        "TRAP-GEN-001",
+        "TRAP-PY-001",
+        "TRAP-PY-002",
+        "TRAP-TS-001",
+        "TRAP-TS-002",
+        "TRAP-VER-001",
+        "TRAP-VER-002",
+        "TRAP-VER-003",
+    }
     assert promoted_ids == expected_ids, f"Unexpected promoted trap set: {sorted(promoted_ids)}"
 
     baseline_data = json.loads(baseline_path.read_text(encoding="utf-8"))

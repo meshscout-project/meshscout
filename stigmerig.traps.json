@@ -158,6 +158,102 @@
       },
       "match_mode": "multiline",
       "promoted_at": "2026-11-17"
+    },
+    {
+      "trap_id": "TRAP-VER-001",
+      "domain": "verification-hygiene",
+      "title": "Unjustified Skipped Test",
+      "trigger_pattern": "@unittest\\.skip\\(\\s*(?:['\\\"]\\s*['\\\"]\\s*)?\\)|@(?:pytest\\.)?mark\\.skip\\b(?:\\(\\s*(?:reason\\s*=\\s*['\\\"]\\s*['\\\"]\\s*)?\\))?(?!\\s*\\()|\\b(?:it|test)\\.skip\\(|#\\[\\s*ignore\\s*\\]",
+      "forbidden_claim_or_action": "Skipping tests without a tracked reason via @unittest.skip(\"\"), bare @pytest.mark.skip, it.skip(), test.skip(), or bare #[ignore].",
+      "remediation_atom": "Fix the failing test or document a tracked reason using skip(reason=...) in Python, eslint-plugin-jest/no-disabled-tests rules in JS/TS, or clippy::ignore_without_reason in Rust.",
+      "source_trace": "stigmerig:starter-pack:verification",
+      "source_traces": [
+        "stigmerig:starter-pack:verification"
+      ],
+      "occurrences": 1,
+      "status": "promoted",
+      "target_globs": [
+        "**/*.py",
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.mjs",
+        "**/*.cjs",
+        "**/*.rs"
+      ],
+      "fixtures": {
+        "positive": "@pytest.mark.skip\ndef test_flaky_checkout():\n    assert True",
+        "negative": "@pytest.mark.skip(reason='Blocked on upstream fix #42')\ndef test_flaky_checkout():\n    assert True"
+      },
+      "promoted_at": "2026-11-18"
+    },
+    {
+      "trap_id": "TRAP-VER-002",
+      "domain": "verification-hygiene",
+      "title": "Blanket Linter Suppression",
+      "trigger_pattern": "#\\s*noqa\\b(?!\\s*:\\s*[A-Za-z0-9_-]+)|(?://|/\\*)\\s*eslint-disable(?:-next-line|-line)?(?![A-Za-z0-9_-])(?![ \\t]+[A-Za-z0-9_@/])|//\\s*nolint\\b(?!\\s*:\\s*[A-Za-z0-9_,-]+)",
+      "forbidden_claim_or_action": "Using bare # noqa, bare // eslint-disable, or bare // nolint comments without scoping specific rule codes.",
+      "remediation_atom": "Fix the underlying diagnostic or scope the suppression to an explicit rule code (such as # noqa: E501) per ruff PGH004, eslint-comments/no-unlimited-disable, and nolintlint.",
+      "source_trace": "stigmerig:starter-pack:verification",
+      "source_traces": [
+        "stigmerig:starter-pack:verification"
+      ],
+      "occurrences": 1,
+      "status": "promoted",
+      "target_globs": [
+        "**/*.py",
+        "**/*.pyi",
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.mjs",
+        "**/*.cjs",
+        "**/*.go",
+        "!tests/**",
+        "!**/tests/**",
+        "!**/__tests__/**",
+        "!**/test_*.py",
+        "!**/*_test.*",
+        "!**/*.test.*",
+        "!**/*.spec.*"
+      ],
+      "fixtures": {
+        "positive": "val = compute()  # noqa",
+        "negative": "val = compute()  # noqa: E501"
+      },
+      "promoted_at": "2026-11-18"
+    },
+    {
+      "trap_id": "TRAP-VER-003",
+      "domain": "verification-hygiene",
+      "title": "Unresolved Citation or Verification Placeholder",
+      "trigger_pattern": "(?i)\\[CITATION NEEDED\\]|\\bTODO:\\s*cite\\b|\\[UNVERIFIED\\]",
+      "forbidden_claim_or_action": "Leaving unresolved [CITATION NEEDED], TODO: cite, or [UNVERIFIED] placeholders in Markdown documentation.",
+      "remediation_atom": "Replace placeholder tags with a verified primary-source citation, file-and-line reference, or [INFERENCE: LOW | MEDIUM | HIGH] uncertainty label.",
+      "source_trace": "stigmerig:starter-pack:verification",
+      "source_traces": [
+        "stigmerig:starter-pack:verification"
+      ],
+      "occurrences": 1,
+      "status": "promoted",
+      "target_globs": [
+        "**/*.md",
+        "**/*.mdx",
+        "!tests/**",
+        "!**/tests/**",
+        "!**/__tests__/**",
+        "!**/test_*.py",
+        "!**/*_test.*",
+        "!**/*.test.*",
+        "!**/*.spec.*"
+      ],
+      "fixtures": {
+        "positive": "Benchmark latency improved by 40% [CITATION NEEDED].",
+        "negative": "Benchmark latency improved by 40% (Smith et al., 2026, Table 2)."
+      },
+      "promoted_at": "2026-11-18"
     }
   ]
 }
