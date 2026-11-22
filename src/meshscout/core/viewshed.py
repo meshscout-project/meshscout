@@ -776,3 +776,156 @@ def compute_radial_viewshed_polygon(
             direction=direction,
         )
     )
+
+
+class HighpointSnapResult(BaseModel):
+    """Result of snapping a candidate coordinate to the highest nearby terrain point."""
+
+    origin: Coordinate
+    snapped: Coordinate
+    gain_m: float
+    offset_m: float
+    samples_checked: int
+
+
+def find_local_highpoint(
+    origin: Coordinate,
+    elevation_fn: Callable[[float, float], float],
+    radius_m: float = 500.0,
+    step_m: float = 50.0,
+) -> Result[HighpointSnapResult]:
+    """Snap a candidate coordinate to the highest terrain point within a local radius."""
+    if radius_m <= 0.0 or step_m <= 0.0:
+        return Result.fail(
+            code="INVALID_SEARCH_GRID",
+            message=f"Search radius and step must be > 0 (got radius_m={radius_m}, step_m={step_m}).",
+        )
+
+    origin_elev = float(elevation_fn(origin.lat, origin.lon))
+    origin_coord_with_elev = Coordinate(
+        lat=origin.lat,
+        lon=origin.lon,
+        elevation_m=origin_elev,
+    )
+
+    cos_origin_lat = max(1e-6, math.cos(math.radians(origin.lat)))
+    meters_per_deg_lat = 111_320.0
+    meters_per_deg_lon = 111_320.0 * cos_origin_lat
+
+    max_steps = int(math.floor((radius_m / step_m) + 1e-9))
+    radius_sq_limit = (radius_m * radius_m) * (1.0 + 1e-9)
+
+    best_elev = origin_elev
+    best_dist_m = 0.0
+    best_lat = origin.lat
+    best_lon = origin.lon
+    samples_checked = 0
+
+    for ix in range(-max_steps, max_steps + 1):
+        dx = ix * step_m
+        for iy in range(-max_steps, max_steps + 1):
+            dy = iy * step_m
+            if (dx * dx + dy * dy) > radius_sq_limit:
+                continue
+
+            sample_lat = origin.lat + (dy / meters_per_deg_lat)
+            if sample_lat < -90.0 or sample_lat > 90.0:
+                continue
+            sample_lon = origin.lon + (dx / meters_per_deg_lon)
+
+            samples_checked += 1
+            if ix == 0 and iy == 0:
+                continue
+
+            dist_m = math.hypot(dx, dy)
+            elev = float(elevation_fn(sample_lat, sample_lon))
+            if elev > best_elev or (elev == best_elev and dist_m < best_dist_m):
+                best_elev = elev
+                best_dist_m = dist_m
+                best_lat = sample_lat
+                best_lon = sample_lon
+
+    gain_m = round(best_elev - origin_elev, 2)
+    offset_m = round(best_dist_m, 2)
+
+    return Result.success(
+        HighpointSnapResult(
+            origin=origin_coord_with_elev,
+            snapped=Coordinate(lat=best_lat, lon=best_lon, elevation_m=best_elev),
+            gain_m=gain_m,
+            offset_m=offset_m,
+            samples_checked=samples_checked,
+        )
+    )
+
+
+class HorizonSkylinePoint(BaseModel):
+    """Maximum k=4/3 curvature-adjusted terrain horizon obstruction along one azimuth."""
+
+    azimuth_deg: float
+    horizon_angle_deg: float
+    obstruction_dist_km: float
+    obstruction_elev_m: float
+
+
+def compute_horizon_skyline(
+    origin: Coordinate,
+    mast_height_m: float,
+    elevation_fn: Callable[[float, float], float],
+    max_radius_km: float = 30.0,
+    azimuth_step_deg: int = 10,
+    radial_steps: int = 40,
+) -> List[HorizonSkylinePoint]:
+    """Compute a 360-degree horizon skyline profile from origin with k=4/3 Earth curvature."""
+    if azimuth_step_deg <= 0 or max_radius_km <= 0.0 or radial_steps <= 0:
+        return []
+
+    origin_elev = (
+        origin.elevation_m
+        if origin.elevation_m != 0.0
+        else float(elevation_fn(origin.lat, origin.lon))
+    )
+    tx_alt_m = origin_elev + mast_height_m
+    cos_origin_lat = max(0.2, math.cos(math.radians(origin.lat)))
+    step_km = max_radius_km / radial_steps
+
+    skyline: List[HorizonSkylinePoint] = []
+    az_idx = 0
+    while True:
+        az_deg = float(az_idx * azimuth_step_deg)
+        if az_deg >= 360.0 - 1e-9:
+            break
+        az_idx += 1
+
+        az_rad = math.radians(az_deg)
+        sin_az = math.sin(az_rad)
+        cos_az = math.cos(az_rad)
+
+        max_angle_deg = -math.inf
+        best_dist_km = step_km
+        best_elev_m = origin_elev
+
+        for step in range(1, radial_steps + 1):
+            dist_km = step * step_km
+            d_m = dist_km * 1000.0
+            pt_lat = origin.lat + (dist_km / 111.32) * cos_az
+            pt_lon = origin.lon + (dist_km / (111.32 * cos_origin_lat)) * sin_az
+            terrain_m = float(elevation_fn(pt_lat, pt_lon))
+            bulge_m = (d_m ** 2) / (2.0 * EFFECTIVE_EARTH_RADIUS_M)
+            angle_deg = math.degrees(math.atan2(terrain_m - bulge_m - tx_alt_m, d_m))
+
+            if angle_deg > max_angle_deg:
+                max_angle_deg = angle_deg
+                best_dist_km = dist_km
+                best_elev_m = terrain_m
+
+        skyline.append(
+            HorizonSkylinePoint(
+                azimuth_deg=az_deg,
+                horizon_angle_deg=round(max_angle_deg, 3),
+                obstruction_dist_km=round(best_dist_km, 2),
+                obstruction_elev_m=round(best_elev_m, 1),
+            )
+        )
+
+    return skyline

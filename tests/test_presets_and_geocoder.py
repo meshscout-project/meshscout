@@ -81,6 +81,10 @@ def test_all_presets_load_and_build_valid_radio_config() -> None:
         "STATION_G2_BACKBONE",
         "HELTEC_V3_HOME",
         "SENSECAP_T1000E",
+        "STATION_G3_REPEATER",
+        "HELTEC_V4_PA",
+        "HELTEC_T114_PORTABLE",
+        "SEEED_XIAO_NRF52_SOLAR",
     }
     expected_proto = {
         "MESHTASTIC_LONGFAST",

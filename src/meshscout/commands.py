@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from meshscout.adapters.elevation import ElevationGrid, USGS3DEPElevationAdapter
 from meshscout.adapters.fcc_asr import FCCASRAdapter
 from meshscout.adapters.vt_vcgi import VCGIRegionalAdapter
+from meshscout.core.composite_viewshed import compute_composite_viewshed
 from meshscout.core.contracts import (
     Coordinate,
     RadioConfig,
@@ -30,17 +31,21 @@ from meshscout.core.regulatory import (
     advise_eirp as core_advise_eirp,
     detect_regulatory_domain,
 )
+from meshscout.core.resilience import evaluate_topology_resilience
 from meshscout.core.scorer import (
     EmitterSpec,
     rank_candidate_sites,
     score_site_viability,
 )
+from meshscout.core.traffic import compute_meshtastic_channel_slot
 from meshscout.core.viewshed import (
     ViewshedResult,
     _synthetic_vermont_elevation_fn,
     compute_viewshed,
+    find_local_highpoint,
     generate_target_grid,
 )
+from meshscout.reporting import export_atak_cot_xml, parse_bulk_sites_csv
 
 logger = logging.getLogger(__name__)
 
@@ -641,6 +646,213 @@ def advise_eirp(
     return res
 
 
+def evaluate_backbone_resilience(
+    region: str = "vt_chittenden",
+    site_ids: Optional[Sequence[str]] = None,
+    min_margin_db: float = 0.0,
+    channel_name: str = "LongFast",
+    protocol_key: str = "MESHTASTIC_LONGFAST",
+    hardware_id: str = "RAK4631_SOLAR",
+) -> Dict[str, Any]:
+    """Evaluate backbone topology SPOFs, bridge links, BOM, and Meshtastic channel slot."""
+    bounds, sites = load_regional_fixtures(region)
+    if site_ids:
+        allowed = set(site_ids)
+        sites = [s for s in sites if s.site_id in allowed]
+    if not sites:
+        return {
+            "ok": False,
+            "error": {
+                "code": "EMPTY_TOPOLOGY",
+                "message": "No candidate sites matched selection.",
+            },
+        }
+
+    rc_res = build_radio_config(hardware_id, protocol_key)
+    if not rc_res.ok or rc_res.value is None:
+        return {
+            "ok": False,
+            "error": {
+                "code": rc_res.error.code if rc_res.error else "INVALID_CONFIG",
+                "message": (
+                    rc_res.error.message
+                    if rc_res.error
+                    else "Invalid radio configuration"
+                ),
+            },
+        }
+
+    adapter = _build_offline_elevation_adapter(bounds)
+
+    def elev_fn(lat: float, lon: float) -> float:
+        r = adapter.get_elevation_at(lat, lon)
+        return (
+            float(r.value)
+            if (r.ok and r.value is not None)
+            else float(_synthetic_vermont_elevation_fn(lat, lon))
+        )
+
+    cv = compute_composite_viewshed(
+        sites,
+        num_radials=8,
+        direction="two_way",
+        elevation_fn=elev_fn,
+        radio_config=rc_res.value,
+    )
+    if not cv.ok or cv.value is None:
+        return {
+            "ok": False,
+            "error": {
+                "code": cv.error.code if cv.error else "VIEWSHED_ERROR",
+                "message": (
+                    cv.error.message if cv.error else "Failed composite viewshed"
+                ),
+            },
+        }
+
+    links = [
+        (lnk.site_a_id, lnk.site_b_id, lnk.link_margin_db)
+        for lnk in cv.value.intersite_backhaul_links
+    ]
+    rep_res = evaluate_topology_resilience(
+        sites=sites,
+        links=links,
+        min_margin_db=float(min_margin_db),
+    )
+    if not rep_res.ok or rep_res.value is None:
+        return {
+            "ok": False,
+            "error": {
+                "code": rep_res.error.code if rep_res.error else "RESILIENCE_ERROR",
+                "message": (
+                    rep_res.error.message
+                    if rep_res.error
+                    else "Failed resilience evaluation"
+                ),
+            },
+        }
+
+    slot_res = compute_meshtastic_channel_slot(
+        channel_name=channel_name,
+        region_code="US",
+    )
+    return {
+        "ok": True,
+        "region": region,
+        "report": rep_res.value.model_dump(mode="json"),
+        "channel_slot": (
+            slot_res.value.model_dump(mode="json")
+            if (slot_res.ok and slot_res.value is not None)
+            else None
+        ),
+    }
+
+
+def compute_channel_slot(
+    channel_name: str = "LongFast",
+    region_code: str = "US",
+    bandwidth_khz: float = 250.0,
+    explicit_channel_num: int = 0,
+) -> Dict[str, Any]:
+    """Compute Meshtastic djb2 channel hash, 1-indexed frequency slot, and center frequency."""
+    res = compute_meshtastic_channel_slot(
+        channel_name=channel_name,
+        region_code=region_code,
+        bandwidth_khz=float(bandwidth_khz),
+        explicit_channel_num=int(explicit_channel_num),
+    )
+    if not res.ok or res.value is None:
+        return {
+            "ok": False,
+            "error": (
+                res.error.model_dump(mode="json")
+                if res.error
+                else {
+                    "code": "INVALID_CHANNEL_PARAMS",
+                    "message": "Invalid channel parameters",
+                }
+            ),
+        }
+    return {"ok": True, **res.value.model_dump(mode="json")}
+
+
+def snap_site_highpoint(
+    lat: float,
+    lon: float,
+    radius_m: float = 500.0,
+    step_m: float = 50.0,
+) -> Dict[str, Any]:
+    """Snap a candidate coordinate to the highest local terrain point within radius_m."""
+    adapter = _build_offline_elevation_adapter(VT_CHITTENDEN_BOUNDS)
+
+    def elev_fn(sample_lat: float, sample_lon: float) -> float:
+        r = adapter.get_elevation_at(sample_lat, sample_lon)
+        return (
+            float(r.value)
+            if (r.ok and r.value is not None)
+            else float(_synthetic_vermont_elevation_fn(sample_lat, sample_lon))
+        )
+
+    origin = Coordinate(
+        lat=float(lat),
+        lon=float(lon),
+        elevation_m=elev_fn(float(lat), float(lon)),
+    )
+    res = find_local_highpoint(
+        origin=origin,
+        elevation_fn=elev_fn,
+        radius_m=float(radius_m),
+        step_m=float(step_m),
+    )
+    if res.ok and res.value is not None:
+        return {"ok": True, **res.value.model_dump(mode="json")}
+    return {
+        "ok": False,
+        "error": (
+            res.error.model_dump(mode="json")
+            if res.error
+            else {"code": "INVALID_SEARCH_GRID", "message": "Highpoint search failed"}
+        ),
+    }
+
+
+def export_cot_bundle(
+    region: str = "vt_chittenden",
+    site_ids: Optional[Sequence[str]] = None,
+    stale_minutes: int = 60,
+) -> Dict[str, Any]:
+    """Export regional candidate repeater sites as an ATAK Cursor-on-Target (CoT) 2.0 XML bundle."""
+    _, sites = load_regional_fixtures(region)
+    if site_ids:
+        allowed = set(site_ids)
+        sites = [s for s in sites if s.site_id in allowed]
+    return {
+        "ok": True,
+        "region": region,
+        "site_count": len(sites),
+        "cot_xml": export_atak_cot_xml(sites, stale_minutes=int(stale_minutes)),
+    }
+
+
+def import_sites_csv(csv_text: str) -> Dict[str, Any]:
+    """Parse and validate candidate repeater sites from bulk CSV text."""
+    res = parse_bulk_sites_csv(csv_text)
+    if res.ok and res.value is not None:
+        return {
+            "ok": True,
+            "count": len(res.value),
+            "sites": [s.model_dump(mode="json") for s in res.value],
+        }
+    return {
+        "ok": False,
+        "error": (
+            res.error.model_dump(mode="json")
+            if res.error
+            else {"code": "INVALID_CSV_ROW", "message": "CSV import failed"}
+        ),
+    }
+
+
 __all__ = [
     "FCC_ASR_FIXTURE",
     "FIXTURES_DIR",
@@ -652,9 +864,14 @@ __all__ = [
     "_resolve_site_by_id",
     "advise_eirp",
     "build_offline_elevation_adapter",
+    "compute_channel_slot",
+    "evaluate_backbone_resilience",
     "evaluate_link_budget",
+    "export_cot_bundle",
+    "import_sites_csv",
     "inspect_site_feasibility",
     "load_regional_fixtures",
     "resolve_regulatory_domain",
     "scout_repeater_sites",
+    "snap_site_highpoint",
 ]

@@ -42,8 +42,9 @@ def test_mcp_initialize_and_tools_list() -> None:
         "manage_living_mesh_state",
         "advise_eirp",
         "list_region_packs",
+        "evaluate_backbone_resilience",
     }
-    assert len(tools) == 14
+    assert len(tools) == 15
 
 
 def test_mcp_call_scout_repeater_sites() -> None:

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import csv
 import html
+import io
+import math
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from meshscout.core.contracts import (
@@ -10,7 +15,9 @@ from meshscout.core.contracts import (
     LinkBudgetResult,
     RadioConfig,
     ReachabilityState,
+    Result,
     SiteCandidate,
+    SiteType,
 )
 from meshscout.core.optimizer import SetCoverOptimizationResult
 from meshscout.core.scorer import SiteViabilityScore, score_site_viability
@@ -1374,4 +1381,178 @@ def export_kml_document(
     lines.append('  </Document>')
     lines.append('</kml>')
     return '\n'.join(lines)
+
+
+COT_SITE_TYPE: str = "a-f-G-I-U-T"
+
+
+def export_atak_cot_xml(sites: Sequence[SiteCandidate], stale_minutes: int = 60) -> str:
+    """Generate ATAK Cursor-on-Target (CoT) 2.0 XML string for candidate sites."""
+    now = datetime.now(timezone.utc)
+    stale_dt = now + timedelta(minutes=stale_minutes)
+    time_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    stale_str = stale_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    root = ET.Element("events")
+    for site in sites:
+        event = ET.SubElement(
+            root,
+            "event",
+            {
+                "version": "2.0",
+                "uid": f"MESHSCOUT-{site.site_id}",
+                "type": COT_SITE_TYPE,
+                "how": "h-e",
+                "time": time_str,
+                "start": time_str,
+                "stale": stale_str,
+            },
+        )
+        ET.SubElement(
+            event,
+            "point",
+            {
+                "lat": f"{site.location.lat:.6f}",
+                "lon": f"{site.location.lon:.6f}",
+                "hae": f"{site.location.elevation_m + site.mast_height_m:.1f}",
+                "ce": "9999999.0",
+                "le": "9999999.0",
+            },
+        )
+        detail = ET.SubElement(event, "detail")
+        ET.SubElement(detail, "contact", {"callsign": site.name})
+        remarks = ET.SubElement(detail, "remarks")
+        remarks.text = (
+            f"site_id={site.site_id} "
+            f"type={site.site_type.value} "
+            f"mast_m={site.mast_height_m:.1f}"
+        )
+
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+
+
+def parse_bulk_sites_csv(
+    csv_text: str,
+    max_csv_bytes: int = 262_144,
+    max_rows: int = 500,
+) -> Result[List[SiteCandidate]]:
+    """Parse and validate bulk candidate sites from CSV text."""
+    byte_size = len(csv_text.encode("utf-8"))
+    if byte_size > max_csv_bytes:
+        return Result.fail(
+            code="CSV_LIMIT_EXCEEDED",
+            message=f"CSV payload ({byte_size} bytes) exceeds limit of {max_csv_bytes} bytes.",
+        )
+
+    stripped = csv_text.strip()
+    if not stripped:
+        return Result.fail(
+            code="INVALID_CSV_ROW",
+            message="CSV input is empty or missing required headers (Name, Lat, Lon).",
+        )
+
+    reader = csv.DictReader(io.StringIO(stripped))
+    required_cols = {"Name", "Lat", "Lon"}
+    if not reader.fieldnames or not required_cols.issubset(set(reader.fieldnames)):
+        return Result.fail(
+            code="INVALID_CSV_ROW",
+            message="CSV must include required columns: Name, Lat, Lon.",
+        )
+
+    rows = list(reader)
+    if len(rows) > max_rows:
+        return Result.fail(
+            code="CSV_LIMIT_EXCEEDED",
+            message=f"CSV row count ({len(rows)}) exceeds limit of {max_rows} rows.",
+        )
+
+    sites: List[SiteCandidate] = []
+    for idx, row in enumerate(rows, start=1):
+        if None in row:
+            return Result.fail(
+                code="INVALID_CSV_ROW",
+                message=f"Row {idx} has unexpected extra columns.",
+            )
+
+        name = (row.get("Name") or "").strip()
+        lat_raw = (row.get("Lat") or "").strip()
+        lon_raw = (row.get("Lon") or "").strip()
+        elev_raw = (row.get("ElevationM") or "").strip()
+        mast_raw = (row.get("MastM") or "").strip()
+        site_type_raw = (row.get("SiteType") or "").strip()
+
+        if not name or not lat_raw or not lon_raw:
+            return Result.fail(
+                code="INVALID_CSV_ROW",
+                message=f"Row {idx} is missing required Name, Lat, or Lon value.",
+            )
+
+        try:
+            lat = float(lat_raw)
+            lon = float(lon_raw)
+            elevation_m = float(elev_raw) if elev_raw else 0.0
+            mast_height_m = float(mast_raw) if mast_raw else 5.0
+            if not all(math.isfinite(v) for v in (lat, lon, elevation_m, mast_height_m)):
+                raise ValueError("Numeric CSV fields must be finite.")
+            site_type = SiteType(site_type_raw) if site_type_raw else SiteType.CUSTOM
+            coord = Coordinate(lat=lat, lon=lon, elevation_m=elevation_m)
+            site = SiteCandidate(
+                site_id=f"CSV-{idx:03d}",
+                name=name,
+                location=coord,
+                site_type=site_type,
+                mast_height_m=mast_height_m,
+            )
+        except (ValueError, TypeError) as exc:
+            return Result.fail(
+                code="INVALID_CSV_ROW",
+                message=f"Row {idx} failed validation: {exc}",
+            )
+
+        sites.append(site)
+
+    return Result.success(sites)
+
+
+def export_link_matrix_csv(links: Sequence[Dict[str, Any]]) -> str:
+    """Export point-to-point RF link metrics as a CSV matrix string."""
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(
+        ["source_id", "target_id", "distance_km", "margin_db", "reachability_state"]
+    )
+
+    for link in links:
+        if isinstance(link, LinkBudgetResult):
+            writer.writerow(
+                [
+                    link.source_id,
+                    link.target_id,
+                    link.distance_km,
+                    link.link_margin_db,
+                    _reachability_value(link) or "",
+                ]
+            )
+            continue
+
+        margin = link["margin_db"] if "margin_db" in link else link.get("link_margin_db")
+        reach = link.get("reachability_state")
+        if isinstance(reach, ReachabilityState):
+            reach_val: Any = reach.value
+        elif reach is None:
+            reach_val = ""
+        else:
+            reach_val = str(reach)
+
+        writer.writerow(
+            [
+                "" if link.get("source_id") is None else link.get("source_id"),
+                "" if link.get("target_id") is None else link.get("target_id"),
+                "" if link.get("distance_km") is None else link.get("distance_km"),
+                "" if margin is None else margin,
+                reach_val,
+            ]
+        )
+
+    return buf.getvalue()
 

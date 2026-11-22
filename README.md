@@ -34,6 +34,7 @@ All modules exchange validated Pydantic v2 schemas in WGS84 (`EPSG:4326`) coordi
 - `composite_viewshed.py`: Multi-origin composite viewshed polygon union calculation, area estimation, and intersite backhaul link matrix.
 - `corridor.py`: Multi-hop linear backhaul corridor evaluation, cumulative distance, bottleneck link identification, and end-to-end RF feasibility.
 - `staging.py`: Offline region boundary expansion, DEM tile estimation, and field-kit staging.
+- `resilience.py`: Runs Tarjan SPOF graph checks, ranks standby healing relays, and prices rollout BOM kits.
 
 ### Imperative Shell, Adapters, and Web Workbench (`meshscout.adapters`, `meshscout.web`)
 
@@ -120,7 +121,7 @@ meshscout reach --lat 44.4900 --lon -73.1100 --client-preset SENSECAP_T1000E --c
 ### Model Context Protocol (MCP) Interface
 
 MeshScout provides a Day-0 compliant JSON-RPC 2.0 MCP server exposing:
-- **14 Tools**: `scout_repeater_sites`, `evaluate_link_budget`, `inspect_site_feasibility`, `advise_node_role_and_airtime`, `recommend_backhaul_architecture`, `provision_node_radio`, `simulate_winter_solar_survival`, `analyze_mesh_coverage_gaps`, `calibrate_empirical_clutter`, `generate_landowner_brief`, `stage_offline_field_kit`, `manage_living_mesh_state`, `advise_eirp`, `list_region_packs`.
+- **15 Tools**: `scout_repeater_sites`, `evaluate_link_budget`, `inspect_site_feasibility`, `advise_node_role_and_airtime`, `recommend_backhaul_architecture`, `provision_node_radio`, `simulate_winter_solar_survival`, `analyze_mesh_coverage_gaps`, `calibrate_empirical_clutter`, `generate_landowner_brief`, `stage_offline_field_kit`, `manage_living_mesh_state`, `advise_eirp`, `list_region_packs`, `evaluate_backbone_resilience`.
 - **8 Resources**: `meshscout://sites/all`, `meshscout://presets/hardware`, `meshscout://presets/protocols`, `meshscout://state/living-mesh`, `meshscout://fixtures/vt_counties`, `meshscout://presets/site-architectures`, `meshscout://regulatory/north-america`, `meshscout://packs/installed`.
 - **3 Prompts**: `design_regional_emergency_backbone`, `audit_channel_contention`, `prepare_selectboard_pitch`.
 

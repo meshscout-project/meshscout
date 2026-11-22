@@ -187,6 +187,7 @@ from meshscout.commands import (
 )
 from meshscout.core.viewshed import _synthetic_vermont_elevation_fn
 from meshscout.web.regulatory_routes import build_regulatory_router
+from meshscout.web.resilience_routes import build_resilience_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -4729,6 +4730,7 @@ def create_web_app(
         }
 
     app.include_router(build_regulatory_router())
+    app.include_router(build_resilience_router())
 
     return app
 

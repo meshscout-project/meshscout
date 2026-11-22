@@ -199,13 +199,13 @@ def test_user_install(
             "srv = MeshScoutMCPServer(); "
             "res = srv.handle_request({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list', 'params': {}}); "
             "tools = res.get('result', {}).get('tools', []); "
-            "assert len(tools) == 14, f'Expected 14 tools, got {len(tools)}'; "
+            "assert len(tools) == 15, f'Expected 15 tools, got {len(tools)}'; "
             "assert 'scout_repeater_sites' in [t['name'] for t in tools]; "
             "print(f'MCP Server initialized with {len(tools)} tools')"
         )
         proc = run_cmd([str(python_bin), "-c", code_mcp])
         assert proc.returncode == 0, f"MCP server check failed: {proc.stderr}"
-        print("  [PASS] MCP Day-0 server initialized with 14 tools.")
+        print("  [PASS] MCP Day-0 server initialized with 15 tools.")
 
         # Phase 9: Test Suite Execution (Optional / Smoke Test)
         if run_tests:

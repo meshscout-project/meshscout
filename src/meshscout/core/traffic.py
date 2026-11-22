@@ -5,10 +5,18 @@ from __future__ import annotations
 import math
 import shlex
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from pydantic import BaseModel, Field
 
-from meshscout.core.contracts import ReachabilityState, SiteCandidate, SiteType
+from meshscout.core.contracts import ReachabilityState, Result, SiteCandidate, SiteType
+
+
+_MESHTASTIC_BAND_PLANS: Dict[str, Tuple[float, float]] = {
+    "US": (902.0, 928.0),
+    "CA": (902.0, 928.0),
+    "ANZ": (915.0, 928.0),
+    "EU_868": (869.4, 869.65),
+}
 
 
 # ==============================================================================
@@ -18,6 +26,7 @@ from meshscout.core.contracts import ReachabilityState, SiteCandidate, SiteType
 class MeshtasticRole(str, Enum):
     """Meshtastic device operational roles."""
     CLIENT = "CLIENT"
+    CLIENT_BASE = "CLIENT_BASE"
     ROUTER = "ROUTER"
     ROUTER_LATE = "ROUTER_LATE"
     CLIENT_MUTE = "CLIENT_MUTE"
@@ -131,6 +140,31 @@ class BackhaulRecommendation(BaseModel):
         default_factory=list,
         description="Directional asymmetry or link failure warnings",
     )
+
+
+class ChannelSlotPlan(BaseModel):
+    """Deterministic Meshtastic djb2 channel hash and ISM frequency slot plan."""
+    channel_name: str
+    region_code: str
+    bandwidth_khz: float
+    num_channels: int
+    slot_index: int
+    frequency_slot: int
+    center_freq_mhz: float
+    guard_band_mhz: float
+    hash_uint32: int
+
+
+class HiddenTerminalPair(BaseModel):
+    """Hidden-terminal pair collision and capture-effect assessment for a hub node."""
+    hub_site_id: str
+    site_a_id: str
+    site_b_id: str
+    rx_a_dbm: float
+    rx_b_dbm: float
+    sir_db: float
+    collision_destructive: bool
+    captured_winner: Optional[str] = None
 
 
 # ==============================================================================
@@ -547,9 +581,17 @@ def advise_node_role(
     else:
         # Default: Meshtastic
         safe_name = shlex.quote(site.name)
-        if is_residential_context or (not is_summit):
+        req_role = requested_role.strip().upper() if requested_role else None
+        if req_role == MeshtasticRole.CLIENT_BASE.value:
+            # CLIENT_BASE is permitted on rooftops and low masts without Town-Killer ROUTER demotion
+            role = MeshtasticRole.CLIENT_BASE.value
+            risk = is_directional_hazard
+            msg = hazard_msg
+            cli = f"meshtastic --set-owner {safe_name} --set device.role CLIENT_BASE"
+            coord = False
+        elif is_residential_context or (not is_summit):
             # Residential or low mast attempting ROUTER causes town-killer hidden node collisions
-            wants_router = requested_role in ("ROUTER", "ROUTER_LATE", "ROUTER_CLIENT")
+            wants_router = req_role in ("ROUTER", "ROUTER_LATE", "ROUTER_CLIENT")
             if wants_router:
                 role = MeshtasticRole.CLIENT.value
                 risk = True
@@ -730,3 +772,89 @@ def recommend_summit_backhaul(
         asymmetric_mitigation_required=is_asymmetric_or_failed,
         warnings=warnings,
     )
+
+
+def compute_meshtastic_channel_slot(
+    channel_name: str = "LongFast",
+    region_code: str = "US",
+    bandwidth_khz: float = 250.0,
+    explicit_channel_num: int = 0,
+) -> Result[ChannelSlotPlan]:
+    """Compute Meshtastic djb2 channel hash, 1-indexed frequency slot, and center frequency."""
+    region_key = region_code.strip().upper()
+    if region_key not in _MESHTASTIC_BAND_PLANS or not math.isfinite(bandwidth_khz) or bandwidth_khz <= 0.0:
+        return Result.fail(
+            code="INVALID_CHANNEL_PARAMS",
+            message=f"Invalid channel parameters: region_code={region_code!r}, bandwidth_khz={bandwidth_khz!r}",
+        )
+
+    f_start, f_end = _MESHTASTIC_BAND_PLANS[region_key]
+    h = 5381
+    for b in channel_name.encode("utf-8"):
+        h = ((h << 5) + h + b) & 0xFFFFFFFF
+
+    bw_mhz = bandwidth_khz / 1000.0
+    num_channels = max(1, int(math.floor((f_end - f_start) / bw_mhz)))
+    if explicit_channel_num < 0 or explicit_channel_num > num_channels:
+        return Result.fail(
+            code="INVALID_CHANNEL_PARAMS",
+            message=(
+                f"explicit_channel_num ({explicit_channel_num}) must be between 0 and {num_channels} "
+                f"for region '{region_key}' at {bandwidth_khz} kHz"
+            ),
+        )
+
+    slot_index = (explicit_channel_num - 1) if explicit_channel_num > 0 else (h % num_channels)
+    frequency_slot = slot_index + 1
+    center_freq_mhz = round(f_start + (bandwidth_khz / 2000.0) + slot_index * bw_mhz, 6)
+    guard_band_mhz = round((f_end - f_start) - num_channels * bw_mhz, 6)
+
+    return Result.success(
+        ChannelSlotPlan(
+            channel_name=channel_name,
+            region_code=region_key,
+            bandwidth_khz=bandwidth_khz,
+            num_channels=num_channels,
+            slot_index=slot_index,
+            frequency_slot=frequency_slot,
+            center_freq_mhz=center_freq_mhz,
+            guard_band_mhz=guard_band_mhz,
+            hash_uint32=h,
+        )
+    )
+
+
+def evaluate_hidden_terminal_matrix(
+    site_ids: Sequence[str],
+    pairwise_rx_dbm: Dict[Tuple[str, str], float],
+    rx_sensitivity_dbm: float = -134.0,
+    capture_threshold_db: float = 6.0,
+) -> List[HiddenTerminalPair]:
+    """Identify hidden-terminal pairs relative to each hub and evaluate LoRa capture effect."""
+    results: List[HiddenTerminalPair] = []
+    for hub in site_ids:
+        others = sorted({s for s in site_ids if s != hub})
+        for idx, a in enumerate(others):
+            for b in others[idx + 1 :]:
+                rx_a = pairwise_rx_dbm.get((a, hub), -999.0)
+                rx_b = pairwise_rx_dbm.get((b, hub), -999.0)
+                if rx_a < rx_sensitivity_dbm or rx_b < rx_sensitivity_dbm:
+                    continue
+                if max(pairwise_rx_dbm.get((a, b), -999.0), pairwise_rx_dbm.get((b, a), -999.0)) >= rx_sensitivity_dbm:
+                    continue
+                sir_db = round(abs(rx_a - rx_b), 3)
+                collision_destructive = sir_db < capture_threshold_db
+                captured_winner = None if collision_destructive else (a if rx_a > rx_b else b)
+                results.append(
+                    HiddenTerminalPair(
+                        hub_site_id=hub,
+                        site_a_id=a,
+                        site_b_id=b,
+                        rx_a_dbm=rx_a,
+                        rx_b_dbm=rx_b,
+                        sir_db=sir_db,
+                        collision_destructive=collision_destructive,
+                        captured_winner=captured_winner,
+                    )
+                )
+    return results

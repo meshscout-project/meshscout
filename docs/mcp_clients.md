@@ -5,7 +5,7 @@ MeshScout supports dual transport modes:
 1. `stdio`: Standard input/output for local desktop clients and subprocess orchestration.
 2. `sse`: Server-Sent Events over HTTP for networked, containerized, or federated setups.
 
-The MCP server exposes 14 tools, 8 resources, and 3 prompts for LoRa/MeshCore RF planning.
+The MCP server exposes 15 tools, 8 resources, and 3 prompts for LoRa/MeshCore RF planning.
 
 ---
 

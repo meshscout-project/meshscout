@@ -35,6 +35,7 @@ L1_CORE_NAMES: Tuple[str, ...] = (
     "corridor",
     "provisioning",
     "traffic",
+    "resilience",
 )
 L1_MODULES: frozenset[str] = frozenset(f"meshscout.core.{name}" for name in L1_CORE_NAMES)
 
@@ -213,7 +214,7 @@ def _extract_meshscout_imports(
 
 def test_acyclic_l0_to_l4_import_dag() -> None:
     """Enforce strict L0-L4 layered import DAG and L4 boundary isolation via AST."""
-    assert len(L1_MODULES) == 13
+    assert len(L1_MODULES) == 14
     modules = _discover_source_modules()
     known_modules = set(modules.keys())
 

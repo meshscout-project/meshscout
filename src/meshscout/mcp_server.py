@@ -2,7 +2,7 @@
 
 Provides a zero-dependency JSON-RPC 2.0 MCP server (`MeshScoutMCPServer`) and an
 optional FastMCP compatibility wrapper when the `mcp` package is installed.
-Exposes fourteen tools:
+Exposes fifteen tools:
   1. `scout_repeater_sites`
   2. `evaluate_link_budget`
   3. `inspect_site_feasibility`
@@ -17,6 +17,7 @@ Exposes fourteen tools:
   12. `manage_living_mesh_state`
   13. `advise_eirp`
   14. `list_region_packs`
+  15. `evaluate_backbone_resilience`
 
 Exposes eight MCP resources:
   - `meshscout://sites/all`
@@ -61,6 +62,7 @@ from meshscout.commands import (
     VT_VCGI_FIXTURE as VT_VCGI_FIXTURE,
     _build_offline_elevation_adapter as _build_offline_elevation_adapter,
     _resolve_site_by_id as _resolve_site_by_id,
+    evaluate_backbone_resilience as evaluate_backbone_resilience,
     evaluate_link_budget as evaluate_link_budget,
     inspect_site_feasibility as inspect_site_feasibility,
     load_regional_fixtures as load_regional_fixtures,
@@ -1456,6 +1458,48 @@ MCP_TOOLS_MANIFEST: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "evaluate_backbone_resilience",
+        "description": (
+            "Evaluate backbone graph Tarjan SPOFs, bridge links, winter rollout BOM, and Meshtastic djb2 channel slot."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "region": {
+                    "type": "string",
+                    "default": "vt_chittenden",
+                    "description": "Target regional fixture or county basin identifier",
+                },
+                "site_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional subset of site IDs to evaluate",
+                },
+                "min_margin_db": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "Minimum link margin in dB required for active graph edges",
+                },
+                "channel_name": {
+                    "type": "string",
+                    "default": "LongFast",
+                    "description": "Meshtastic channel name used for djb2 slot derivation",
+                },
+                "protocol_key": {
+                    "type": "string",
+                    "default": "MESHTASTIC_LONGFAST",
+                    "description": "Protocol profile key for link margin evaluation",
+                },
+                "hardware_id": {
+                    "type": "string",
+                    "default": "RAK4631_SOLAR",
+                    "description": "Hardware preset identifier for backbone nodes",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 MCP_RESOURCES_MANIFEST: List[Dict[str, Any]] = [
@@ -1717,6 +1761,7 @@ class MeshScoutMCPServer:
             "manage_living_mesh_state": self._dispatch_manage_living_mesh_state,
             "advise_eirp": advise_eirp,
             "list_region_packs": self._dispatch_list_region_packs,
+            "evaluate_backbone_resilience": evaluate_backbone_resilience,
         }
 
     def _dispatch_manage_living_mesh_state(self, **kwargs: Any) -> Dict[str, Any]:
@@ -2073,6 +2118,11 @@ DOMAIN_CAPABILITY_MAP: Dict[str, Dict[str, Any]] = {
         "resources": ["meshscout://packs/installed"],
         "description": "Regional tower data pack distribution, manifest verification, and lifecycle management",
     },
+    "core.resilience": {
+        "tools": ["evaluate_backbone_resilience"],
+        "resources": [],
+        "description": "Tarjan SPOF articulation/bridge analysis, standby relay healing ranker, and winter rollout BOM estimation",
+    },
 }
 
 
@@ -2154,6 +2204,7 @@ def create_fastmcp_app(host: str = "127.0.0.1", port: int = 8000) -> Any:
         mcp.tool()(manage_living_mesh_state)
         mcp.tool()(advise_eirp)
         mcp.tool()(list_region_packs)
+        mcp.tool()(evaluate_backbone_resilience)
 
         @mcp.resource("meshscout://sites/all", mime_type="application/json")
         def resource_sites_all() -> str:

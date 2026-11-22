@@ -18,6 +18,8 @@ from meshscout.core.contracts import Coordinate
 from meshscout.core.presets import CLIENT_ENVIRONMENT_PROFILES, build_radio_config
 from meshscout.core.registry import LivingMeshRegistry, evaluate_home_node_reach
 from meshscout.commands import (
+    compute_channel_slot,
+    evaluate_backbone_resilience,
     evaluate_link_budget,
     inspect_site_feasibility,
     load_regional_fixtures,
@@ -852,6 +854,73 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON output.",
     )
 
+    # 12. resilience subcommand
+    p_resilience = subparsers.add_parser(
+        "resilience",
+        help="Evaluate backbone topology SPOFs, bridge links, and rollout BOM.",
+    )
+    p_resilience.add_argument(
+        "--region",
+        default="vt_chittenden",
+        help="Target region identifier (default: vt_chittenden)",
+    )
+    p_resilience.add_argument(
+        "--min-margin-db",
+        type=float,
+        default=0.0,
+        help="Minimum link margin in dB for backbone connectivity (default: 0.0)",
+    )
+    p_resilience.add_argument(
+        "--channel",
+        default="LongFast",
+        help="Meshtastic channel name (default: LongFast)",
+    )
+    p_resilience.add_argument(
+        "--hardware",
+        default="RAK4631_SOLAR",
+        help="Hardware preset identifier for backbone nodes (default: RAK4631_SOLAR)",
+    )
+    p_resilience.add_argument(
+        "--json",
+        action="store_true",
+        dest="output_json",
+        help="Emit structured JSON output.",
+    )
+
+    # 13. slot subcommand
+    p_slot = subparsers.add_parser(
+        "slot",
+        help="Compute Meshtastic djb2 channel hash, frequency slot, and center frequency.",
+    )
+    p_slot.add_argument(
+        "--channel",
+        default="LongFast",
+        help="Meshtastic channel name (default: LongFast)",
+    )
+    p_slot.add_argument(
+        "--region",
+        default="US",
+        help="Meshtastic regulatory region code (default: US)",
+    )
+    p_slot.add_argument(
+        "--bw-khz",
+        type=float,
+        default=250.0,
+        help="LoRa channel bandwidth in kHz (default: 250.0)",
+    )
+    p_slot.add_argument(
+        "--channel-num",
+        type=int,
+        default=0,
+        help="Explicit 1-indexed channel number override, 0 for hash-derived (default: 0)",
+    )
+    p_slot.add_argument(
+        "--json",
+        action="store_true",
+        dest="output_json",
+        help="Emit structured JSON output.",
+    )
+
     return parser
 
 
@@ -1549,6 +1618,55 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             except Exception as exc:
                 sys.stderr.write(f"Error building regional packs: {exc}\n")
                 return 1
+
+    if args.command == "resilience":
+        res = evaluate_backbone_resilience(
+            region=args.region,
+            min_margin_db=args.min_margin_db,
+            channel_name=args.channel,
+            hardware_id=args.hardware,
+        )
+        if not res.get("ok"):
+            sys.stderr.write(
+                f"Error: {(res.get('error') or {}).get('message', 'Resilience evaluation failed')}\n"
+            )
+            return 1
+
+        if args.output_json:
+            sys.stdout.write(json.dumps(res, indent=2) + "\n")
+        else:
+            report = res["report"]
+            bom = report.get("rollout_bom") or {}
+            sys.stdout.write(
+                f"Region: {res['region']} | Nodes: {report['node_count']} | "
+                f"Edges: {report['edge_count']} | Components: {report['connected_components']} | "
+                f"Biconnected Score: {report['biconnected_score']} | "
+                f"Estimated Total USD: ${float(bom.get('estimated_total_usd', 0.0)):.2f}\n"
+            )
+        return 0
+
+    if args.command == "slot":
+        res = compute_channel_slot(
+            channel_name=args.channel,
+            region_code=args.region,
+            bandwidth_khz=args.bw_khz,
+            explicit_channel_num=args.channel_num,
+        )
+        if not res.get("ok"):
+            sys.stderr.write(
+                f"Error: {(res.get('error') or {}).get('message', 'Channel slot computation failed')}\n"
+            )
+            return 1
+
+        if args.output_json:
+            sys.stdout.write(json.dumps(res, indent=2) + "\n")
+        else:
+            sys.stdout.write(
+                f"Channel: {res['channel_name']} | Region: {res['region_code']} | "
+                f"Frequency Slot: {res['frequency_slot']} (slot_index={res['slot_index']}) | "
+                f"Center Freq: {res['center_freq_mhz']} MHz\n"
+            )
+        return 0
 
     return 1
 

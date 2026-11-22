@@ -516,13 +516,18 @@ def find_optimal_mesh_route(
 ) -> Result[MeshRouteResult]:
     """Find the optimal multi-hop mesh packet route bridging origin and destination.
 
-    Evaluates 1-hop direct, 2-hop (via single mountain/water tower repeater), and 3-hop
-    paths, selecting the route that maximizes the bottleneck link fade margin.
+    Evaluates 1-hop direct and bounded multi-hop paths (k = 2..max_hops), returning
+    the fewest-hop viable route and maximizing the bottleneck link fade margin.
     """
     if client_env_loss_db < 0.0:
         return Result.fail(
             code="INVALID_LOSS_PENALTY",
             message=f"client_env_loss_db must be non-negative, got {client_env_loss_db}.",
+        )
+    if max_hops < 1 or max_hops > 7:
+        return Result.fail(
+            code="INVALID_HOP_LIMIT",
+            message=f"max_hops must be between 1 and 7, got {max_hops}.",
         )
 
     active_radio = radio if radio is not None else RadioConfig()
@@ -564,146 +569,149 @@ def find_optimal_mesh_route(
             )
         )
 
-    # 2. Two-hop repeater bridge evaluation
-    # Filter candidates to exclude origin, destination, and inactive repeaters
-    pool = [
-        s for s in candidate_repeaters
-        if s.site_id != origin.site_id
-        and s.site_id != destination.site_id
-        and is_active_candidate(s)
-    ]
+    # 2. Bounded hop-layered widest-path DP (k = 2..max_hops) over 100% of active repeaters
+    pool: List[SiteCandidate] = []
+    if max_hops >= 2:
+        seen_pool_ids: Set[str] = set()
+        for s in candidate_repeaters:
+            if (
+                s.site_id != origin.site_id
+                and s.site_id != destination.site_id
+                and s.site_id not in seen_pool_ids
+                and is_active_candidate(s)
+            ):
+                seen_pool_ids.add(s.site_id)
+                pool.append(s)
 
-    best_2hop: Optional[Tuple[float, SiteCandidate, MeshHopLeg, MeshHopLeg]] = None
+    leg_cache: Dict[Tuple[str, str], Tuple[MeshHopLeg, bool]] = {
+        (origin.site_id, destination.site_id): (leg0, viable0),
+    }
+
+    def _eval_leg_cached(s1: SiteCandidate, s2: SiteCandidate) -> Tuple[MeshHopLeg, bool]:
+        key = (s1.site_id, s2.site_id)
+        cached = leg_cache.get(key)
+        if cached is not None:
+            return cached
+        res = _eval_mesh_hop_leg(
+            s1,
+            s2,
+            origin,
+            destination,
+            active_radio,
+            elevation_fn,
+            min_link_margin_db,
+            is_asymmetric,
+            origin_client_radio,
+            destination_client_radio,
+            client_env_loss_db,
+            site_profiles,
+        )
+        leg_cache[key] = res
+        return res
+
+    # State tuple: (bottleneck_db, raw_dist_km, node_ids, nodes, legs)
+    layer_states: Dict[
+        str,
+        List[Tuple[float, float, Tuple[str, ...], Tuple[SiteCandidate, ...], Tuple[MeshHopLeg, ...]]],
+    ] = {}
     for rep in pool:
-        leg1, viable1 = _eval_mesh_hop_leg(
-            origin,
-            rep,
-            origin,
-            destination,
-            active_radio,
-            elevation_fn,
-            min_link_margin_db,
-            is_asymmetric,
-            origin_client_radio,
-            destination_client_radio,
-            client_env_loss_db,
-            site_profiles,
-        )
-        if not viable1:
-            continue
-        leg2, viable2 = _eval_mesh_hop_leg(
-            rep,
-            destination,
-            origin,
-            destination,
-            active_radio,
-            elevation_fn,
-            min_link_margin_db,
-            is_asymmetric,
-            origin_client_radio,
-            destination_client_radio,
-            client_env_loss_db,
-            site_profiles,
-        )
-        if not viable2:
-            continue
-        bottleneck = min(leg1.link_margin_db, leg2.link_margin_db)
-        if best_2hop is None or bottleneck > best_2hop[0]:
-            best_2hop = (bottleneck, rep, leg1, leg2)
+        leg1, viable1 = _eval_leg_cached(origin, rep)
+        if viable1:
+            layer_states[rep.site_id] = [
+                (leg1.link_margin_db, leg1.distance_km, (rep.site_id,), (rep,), (leg1,))
+            ]
 
-    if best_2hop is not None:
-        btn, r, leg1, leg2 = best_2hop
-        return Result.success(
-            MeshRouteResult(
-                origin_id=origin.site_id,
-                destination_id=destination.site_id,
-                route_found=True,
-                total_hops=2,
-                total_distance_km=round(leg1.distance_km + leg2.distance_km, 2),
-                bottleneck_margin_db=btn,
-                legs=[leg1, leg2],
-                intermediate_node_ids=[r.site_id],
-                hop_limit_exceeded=False,
-                guidance=f"2-hop backbone bridge via {r.name} [{r.site_id}] with {btn:+.1f}dB bottleneck margin.",
-            )
-        )
+    for hop_budget in range(2, max_hops + 1):
+        if not layer_states:
+            break
 
-    # 3. Three-hop evaluation if max_hops >= 3
-    if max_hops >= 3 and len(pool) >= 2:
-        best_3hop: Optional[Tuple[float, SiteCandidate, SiteCandidate, List[MeshHopLeg]]] = None
-        # Evaluate top candidate pairs
-        for r1 in pool[:8]:
-            leg1, viable1 = _eval_mesh_hop_leg(
-                origin,
-                r1,
-                origin,
-                destination,
-                active_radio,
-                elevation_fn,
-                min_link_margin_db,
-                is_asymmetric,
-                origin_client_radio,
-                destination_client_radio,
-                client_env_loss_db,
-                site_profiles,
-            )
-            if not viable1:
-                continue
-            for r2 in pool[:8]:
-                if r1.site_id == r2.site_id:
-                    continue
-                leg2, viable2 = _eval_mesh_hop_leg(
-                    r1,
-                    r2,
-                    origin,
-                    destination,
-                    active_radio,
-                    elevation_fn,
-                    min_link_margin_db,
-                    is_asymmetric,
-                    origin_client_radio,
-                    destination_client_radio,
-                    client_env_loss_db,
-                    site_profiles,
-                )
-                if not viable2:
-                    continue
-                leg3, viable3 = _eval_mesh_hop_leg(
-                    r2,
-                    destination,
-                    origin,
-                    destination,
-                    active_radio,
-                    elevation_fn,
-                    min_link_margin_db,
-                    is_asymmetric,
-                    origin_client_radio,
-                    destination_client_radio,
-                    client_env_loss_db,
-                    site_profiles,
-                )
-                if not viable3:
-                    continue
-                bottleneck = min(leg1.link_margin_db, leg2.link_margin_db, leg3.link_margin_db)
-                if best_3hop is None or bottleneck > best_3hop[0]:
-                    best_3hop = (bottleneck, r1, r2, [leg1, leg2, leg3])
+        best_score: Optional[Tuple[float, float, Tuple[str, ...]]] = None
+        best_btn: float = 0.0
+        best_nodes: Optional[Tuple[SiteCandidate, ...]] = None
+        best_legs: Optional[List[MeshHopLeg]] = None
 
-        if best_3hop is not None:
-            btn, r1, r2, legs_list = best_3hop
+        for states in layer_states.values():
+            for btn_prev, dist_prev, ids_prev, nodes_prev, legs_prev in states:
+                leg_end, viable_end = _eval_leg_cached(nodes_prev[-1], destination)
+                if not viable_end:
+                    continue
+                total_btn = min(btn_prev, leg_end.link_margin_db)
+                total_dist = round(dist_prev + leg_end.distance_km, 2)
+                cand_score = (-total_btn, total_dist, ids_prev)
+                if best_score is None or cand_score < best_score:
+                    best_score = cand_score
+                    best_btn = total_btn
+                    best_nodes = nodes_prev
+                    best_legs = [*legs_prev, leg_end]
+
+        if best_score is not None and best_nodes is not None and best_legs is not None:
+            if len(best_nodes) == 1:
+                r = best_nodes[0]
+                guidance = f"2-hop backbone bridge via {r.name} [{r.site_id}] with {best_btn:+.1f}dB bottleneck margin."
+            elif len(best_nodes) == 2:
+                r1, r2 = best_nodes
+                guidance = f"3-hop route via {r1.name} and {r2.name} with {best_btn:+.1f}dB bottleneck margin."
+            else:
+                via_names = ", ".join(n.name for n in best_nodes[:-1]) + f", and {best_nodes[-1].name}"
+                guidance = f"{len(best_legs)}-hop route via {via_names} with {best_btn:+.1f}dB bottleneck margin."
             return Result.success(
                 MeshRouteResult(
                     origin_id=origin.site_id,
                     destination_id=destination.site_id,
                     route_found=True,
-                    total_hops=3,
-                    total_distance_km=round(sum(lg.distance_km for lg in legs_list), 2),
-                    bottleneck_margin_db=btn,
-                    legs=legs_list,
-                    intermediate_node_ids=[r1.site_id, r2.site_id],
+                    total_hops=len(best_legs),
+                    total_distance_km=best_score[1],
+                    bottleneck_margin_db=best_btn,
+                    legs=best_legs,
+                    intermediate_node_ids=[n.site_id for n in best_nodes],
                     hop_limit_exceeded=False,
-                    guidance=f"3-hop route via {r1.name} and {r2.name} with {btn:+.1f}dB bottleneck margin.",
+                    guidance=guidance,
                 )
             )
+
+        if hop_budget == max_hops:
+            break
+
+        candidates_by_node: Dict[
+            str,
+            List[Tuple[float, float, Tuple[str, ...], Tuple[SiteCandidate, ...], Tuple[MeshHopLeg, ...]]],
+        ] = {}
+        for states in layer_states.values():
+            for btn_prev, dist_prev, ids_prev, nodes_prev, legs_prev in states:
+                last_node = nodes_prev[-1]
+                for nxt in pool:
+                    if nxt.site_id in ids_prev:
+                        continue
+                    leg_nxt, viable_nxt = _eval_leg_cached(last_node, nxt)
+                    if not viable_nxt:
+                        continue
+                    new_state = (
+                        min(btn_prev, leg_nxt.link_margin_db),
+                        dist_prev + leg_nxt.distance_km,
+                        (*ids_prev, nxt.site_id),
+                        (*nodes_prev, nxt),
+                        (*legs_prev, leg_nxt),
+                    )
+                    candidates_by_node.setdefault(nxt.site_id, []).append(new_state)
+
+        next_layer: Dict[
+            str,
+            List[Tuple[float, float, Tuple[str, ...], Tuple[SiteCandidate, ...], Tuple[MeshHopLeg, ...]]],
+        ] = {}
+        for node_id, cands in candidates_by_node.items():
+            cands.sort(key=lambda st: (-st[0], round(st[1], 6), st[2]))
+            frontier: List[
+                Tuple[float, float, Tuple[str, ...], Tuple[SiteCandidate, ...], Tuple[MeshHopLeg, ...]]
+            ] = []
+            best_tie: Optional[Tuple[float, Tuple[str, ...]]] = None
+            for st in cands:
+                tie = (round(st[1], 6), st[2])
+                if best_tie is None or tie < best_tie:
+                    frontier.append(st)
+                    best_tie = tie
+            next_layer[node_id] = frontier
+
+        layer_states = next_layer
 
     return Result.success(
         MeshRouteResult(

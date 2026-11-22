@@ -97,14 +97,14 @@ COMMUNITY_SITE_ARCHETYPES: Dict[SiteArchetype, SiteArchetypeSpec] = {
         protocol_mappings={
             "Meshtastic": ProtocolRoleMapping(
                 protocol_family="Meshtastic",
-                role_name="ROUTER_CLIENT (Dual-Radio Bridge)",
+                role_name="ROUTER (Dual-Radio Split-Horizon Bridge)",
                 split_horizon_strategy=SplitHorizonStrategy.HARDWARE_DUAL_RADIO,
-                recommended_hop_limit=2,
+                recommended_hop_limit=3,
                 recommended_channels={
                     "radio_ingress_valley": "915.000 MHz (Public Client Access)",
                     "radio_egress_spine": "906.875 MHz (Dedicated Backbone Inter-Tie)",
                 },
-                cli_command_template="meshtastic --set lora.region US --set lora.hop_limit 2 --set device.role ROUTER_CLIENT",
+                cli_command_template="meshtastic --set lora.region US --set lora.hop_limit 3 --set device.role ROUTER",
                 configuration_notes=[
                     "Deploy Raspberry Pi Zero 2W or CM4 bridging two distinct LoRa transceivers.",
                     "Radio A listens on 915.000 MHz; Radio B transmits across summits on 906.875 MHz.",
@@ -195,11 +195,11 @@ COMMUNITY_SITE_ARCHETYPES: Dict[SiteArchetype, SiteArchetypeSpec] = {
         protocol_mappings={
             "Meshtastic": ProtocolRoleMapping(
                 protocol_family="Meshtastic",
-                role_name="ROUTER_CLIENT",
+                role_name="ROUTER_LATE",
                 split_horizon_strategy=SplitHorizonStrategy.CHANNEL_MASKING,
                 recommended_hop_limit=2,
                 recommended_channels={"access": "915.000 MHz LongFast"},
-                cli_command_template="meshtastic --set lora.region US --set lora.hop_limit 2 --set device.role ROUTER_CLIENT",
+                cli_command_template="meshtastic --set lora.region US --set lora.hop_limit 2 --set device.role ROUTER_LATE",
                 configuration_notes=[
                     "Downtilted antenna illuminates local street canyons and feeds upwards to the mountain spine.",
                 ],
@@ -258,11 +258,11 @@ COMMUNITY_SITE_ARCHETYPES: Dict[SiteArchetype, SiteArchetypeSpec] = {
         protocol_mappings={
             "Meshtastic": ProtocolRoleMapping(
                 protocol_family="Meshtastic",
-                role_name="CLIENT (or CLIENT_MUTE)",
+                role_name="CLIENT_BASE (or CLIENT)",
                 split_horizon_strategy=SplitHorizonStrategy.NONE_CLIENT_ONLY,
                 recommended_hop_limit=3,
                 recommended_channels={"access": "915.000 MHz LongFast"},
-                cli_command_template="meshtastic --set lora.region US --set device.role CLIENT",
+                cli_command_template="meshtastic --set lora.region US --set device.role CLIENT_BASE",
                 configuration_notes=["Keeps channel clean while offering solid home coverage."],
                 anti_pattern_warnings=["Do NOT set role to ROUTER unless in an isolated area with zero coverage."],
             ),

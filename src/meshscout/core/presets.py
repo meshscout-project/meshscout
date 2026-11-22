@@ -6,7 +6,7 @@ bridging user-friendly presets to the core Longley-Rice ITM `RadioConfig` contra
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from meshscout.core.contracts import RadioConfig, Result, SiteRadioProfile, SiteType
@@ -101,6 +101,46 @@ HARDWARE_PRESETS: Dict[str, HardwarePreset] = {
         typical_power_draw_mw=25.0,
         solar_friendly=True,
     ),
+    "STATION_G3_REPEATER": HardwarePreset(
+        preset_id="STATION_G3_REPEATER",
+        label="Station G3 High-Power Repeater + 8dBi Omni + Cavity",
+        description="High-power commercial repeater with front-end cavity filter and FEM PA.",
+        tx_power_dbm=30.0,
+        antenna_gain_dbi=8.0,
+        cable_loss_db=1.0,
+        typical_power_draw_mw=1900.0,
+        solar_friendly=False,
+    ),
+    "HELTEC_V4_PA": HardwarePreset(
+        preset_id="HELTEC_V4_PA",
+        label="Heltec V4 + PA (28dBm) + 5dBi Omni",
+        description="ESP32-S3 LoRa gateway node with integrated power amplifier.",
+        tx_power_dbm=28.0,
+        antenna_gain_dbi=5.0,
+        cable_loss_db=0.5,
+        typical_power_draw_mw=620.0,
+        solar_friendly=False,
+    ),
+    "HELTEC_T114_PORTABLE": HardwarePreset(
+        preset_id="HELTEC_T114_PORTABLE",
+        label="Heltec Mesh Node T114 Portable (nRF52840)",
+        description="Low-draw nRF52840 portable tracker/relay with 2dBi stubby antenna.",
+        tx_power_dbm=22.0,
+        antenna_gain_dbi=2.0,
+        cable_loss_db=0.2,
+        typical_power_draw_mw=42.0,
+        solar_friendly=True,
+    ),
+    "SEEED_XIAO_NRF52_SOLAR": HardwarePreset(
+        preset_id="SEEED_XIAO_NRF52_SOLAR",
+        label="Seeed XIAO nRF52840 + SX1262 Micro Solar",
+        description="Ultra-low quiescent micro-repeater for compact canopy/ridge packs.",
+        tx_power_dbm=22.0,
+        antenna_gain_dbi=5.8,
+        cable_loss_db=0.5,
+        typical_power_draw_mw=38.0,
+        solar_friendly=True,
+    ),
 }
 
 
@@ -159,6 +199,13 @@ PROTOCOL_PROFILES: Dict[str, ProtocolProfile] = {
         spreading_factor=8,
         rx_sensitivity_dbm=-124.0,
     ),
+}
+
+MESHTASTIC_BAND_PLANS: Dict[str, Tuple[float, float]] = {
+    "US": (902.0, 928.0),
+    "CA": (902.0, 928.0),
+    "ANZ": (915.0, 928.0),
+    "EU_868": (869.4, 869.65),
 }
 
 
@@ -334,4 +381,5 @@ def list_all_presets() -> Dict[str, Any]:
         "site_noise_penalties_db": {
             k.value: v for k, v in SITE_NOISE_PENALTIES_DB.items()
         },
+        "meshtastic_band_plans": dict(MESHTASTIC_BAND_PLANS),
     }

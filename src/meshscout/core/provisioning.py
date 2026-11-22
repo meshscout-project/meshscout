@@ -36,6 +36,7 @@ class ProvisioningPayload(BaseModel):
     hop_limit: Optional[int] = Field(default=None, description="Optional packet hop limit")
     raw_url_or_text: str = Field(..., description="Raw shareable configuration URL or config stanza")
     cli_commands: List[str] = Field(default_factory=list, description="Ready-to-paste CLI execution commands")
+    meshcore_serial_commands: List[str] = Field(default_factory=list, description="MeshCore v1.14+ repeater serial console commands")
     inline_svg_qr: str = Field(..., description="Pure-Python generated inline SVG QR code")
 
 
@@ -571,6 +572,39 @@ def generate_meshcore_cli_commands(
     return [cmd]
 
 
+def generate_meshcore_serial_script(
+    site: SiteCandidate,
+    freq_mhz: float = 915.0,
+    bw_khz: float = 125.0,
+    sf: int = 10,
+    cr: int = 5,
+    tx_power_dbm: int = 22,
+    flood_max_hops: int = 3,
+    loop_detect: str = "moderate",
+    path_hash_mode: int = 1,
+    rx_boost: bool = True,
+    fem_txgain_db: Optional[int] = None,
+) -> List[str]:
+    """Generate MeshCore v1.14+ repeater serial console provisioning commands."""
+    safe_name = site.name.encode("utf-8")[:23].decode("utf-8", errors="ignore")
+    cmds = [
+        f"set name {safe_name}",
+        f"set lat {site.location.lat:.6f}",
+        f"set lon {site.location.lon:.6f}",
+        f"set radio {freq_mhz},{bw_khz},{sf},{cr}",
+        f"set tx {tx_power_dbm}",
+        "set repeat on",
+        f"set flood.max {flood_max_hops}",
+        f"set loop.detect {loop_detect}",
+        f"set path.hash.mode {path_hash_mode}",
+        f"set radio.rxgain {'on' if rx_boost else 'off'}",
+    ]
+    if fem_txgain_db is not None:
+        cmds.append(f"set radio.fem.txgain {fem_txgain_db}")
+    cmds.append("reboot")
+    return cmds
+
+
 def generate_reticulum_rnode_stanza(
     site: SiteCandidate,
     freq_mhz: float = 915.0,
@@ -580,6 +614,13 @@ def generate_reticulum_rnode_stanza(
     tx_power_dbm: Optional[float] = 22.0,
     port: str = "/dev/ttyUSB0",
     hop_limit: Optional[int] = None,
+    network_name: Optional[str] = None,
+    passphrase: Optional[str] = None,
+    ifac_size: Optional[int] = None,
+    id_callsign: Optional[str] = None,
+    id_interval_sec: int = 600,
+    airtime_limit_short_pct: Optional[float] = None,
+    airtime_limit_long_pct: Optional[float] = None,
 ) -> str:
     """Generate ready-to-paste Reticulum Network Stack (rns.conf) RNodeInterface stanza."""
     freq_hz = int(round(freq_mhz * 1_000_000))
@@ -599,6 +640,19 @@ def generate_reticulum_rnode_stanza(
     )
     if hop_limit is not None:
         stanza += f"\n  hop_limit = {int(hop_limit)}"
+    if network_name is not None:
+        stanza += f"\n  network_name = {network_name}"
+    if passphrase is not None:
+        stanza += f"\n  passphrase = {passphrase}"
+    if ifac_size is not None:
+        stanza += f"\n  ifac_size = {int(ifac_size)}"
+    if id_callsign is not None:
+        stanza += f"\n  id_callsign = {id_callsign}"
+        stanza += f"\n  id_interval = {int(id_interval_sec)}"
+    if airtime_limit_short_pct is not None:
+        stanza += f"\n  airtime_limit_short = {airtime_limit_short_pct}"
+    if airtime_limit_long_pct is not None:
+        stanza += f"\n  airtime_limit_long = {airtime_limit_long_pct}"
     return stanza
 
 
@@ -646,6 +700,15 @@ def generate_site_provisioning(
             tx_power_dbm=tx_power_dbm,
             hop_limit=hop_limit,
         )
+        serial_cmds = generate_meshcore_serial_script(
+            site=site,
+            freq_mhz=proto.frequency_mhz,
+            bw_khz=proto.bandwidth_khz,
+            sf=proto.spreading_factor,
+            cr=5,
+            tx_power_dbm=int(round(tx_power_dbm)) if tx_power_dbm is not None else 22,
+            flood_max_hops=hop_limit if hop_limit is not None else 3,
+        )
         cli_text = cmds[0]
         qr_svg = generate_qr_svg(cli_text)
         return ProvisioningPayload(
@@ -659,6 +722,7 @@ def generate_site_provisioning(
             hop_limit=hop_limit,
             raw_url_or_text=cli_text,
             cli_commands=cmds,
+            meshcore_serial_commands=serial_cmds,
             inline_svg_qr=qr_svg,
         )
 
