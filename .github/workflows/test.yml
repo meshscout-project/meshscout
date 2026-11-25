@@ -51,5 +51,11 @@ jobs:
           pip install -e ".[web,dev]"
 
       - name: Run pytest verification suite
+        if: matrix.python-version != '3.12'
         run: |
           pytest tests -v
+
+      - name: Run pytest with 85 percent coverage gate
+        if: matrix.python-version == '3.12'
+        run: |
+          python scripts/check_coverage.py --min-pct 85.0 --pytest-args tests -v

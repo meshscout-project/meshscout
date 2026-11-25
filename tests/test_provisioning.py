@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import base64
+import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import pytest
 
 from meshscout.core.contracts import Coordinate, LinkBudgetResult, RadioConfig, SiteCandidate, SiteType
@@ -389,3 +392,89 @@ class TestSiteProvisioningAndDossierIntegration:
         assert "[[RNode-VT-MANS-01]]" in html_doc
         assert "<svg" in html_doc
         assert 'fill="#000000"' in html_doc
+
+
+def test_pure_python_qr_fallback_without_segno(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify pure-Python QR fallback across versions 1-10 when segno is unavailable."""
+    monkeypatch.setitem(sys.modules, "segno", None)
+
+    for v in range(1, 11):
+        payload = "MeshScout-" + ("X" * (v * 2))
+        matrix = build_qr_matrix(payload, force_version=v)
+        size = 17 + 4 * v
+        assert len(matrix) == size
+        assert all(len(row) == size for row in matrix)
+        assert all(isinstance(cell, bool) for row in matrix for cell in row)
+        assert matrix[0][0] is True
+        assert matrix[1][1] is False
+        assert matrix[0][size - 1] is True
+        assert matrix[size - 1][0] is True
+        assert matrix[size - 8][8] is True
+        assert build_qr_matrix(payload, force_version=v) == matrix
+
+    svg = generate_qr_svg("MeshScout")
+    assert svg.startswith("<svg")
+    assert svg.endswith("</svg>")
+    assert '<rect x="' in svg
+    assert 'fill="#000000"' in svg
+
+
+def test_check_coverage_script_enforces_floor(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify coverage script Python < 3.12 skip fallback and >= 3.12 floor enforcement."""
+    repo_root = Path(__file__).resolve().parent.parent
+    script_path = repo_root / "scripts" / "check_coverage.py"
+    contracts_test = repo_root / "tests" / "test_contracts.py"
+
+    spec = importlib.util.spec_from_file_location("check_coverage", script_path)
+    assert spec is not None and spec.loader is not None
+    check_coverage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check_coverage)
+
+    with monkeypatch.context() as m:
+        m.setattr(sys, "version_info", (3, 11, 9))
+        m.setattr(pytest, "main", lambda args: 0)
+        rc = check_coverage.main(["--pytest-args", str(contracts_test), "-q"])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "[SKIP]" in captured.out
+
+    if sys.version_info >= (3, 12):
+        pass_res = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--min-pct",
+                "1.0",
+                "--pytest-args",
+                str(contracts_test),
+                "-q",
+            ],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert pass_res.returncode == 0
+        assert "[PASS]" in pass_res.stdout
+
+        fail_res = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--min-pct",
+                "99.9",
+                "--pytest-args",
+                str(contracts_test),
+                "-q",
+            ],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert fail_res.returncode == 1
+        assert "[FAIL]" in fail_res.stdout
