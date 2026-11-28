@@ -1496,7 +1496,7 @@ def test_workbench_ui_telemetry_layers_and_toggles(client: TestClient) -> None:
 
 
 def test_version_dynamic_status_and_commercial_towers_seeded(client: TestClient) -> None:
-    """Verify /api/status returns active version 0.15.0 and commercial towers are seeded."""
+    """Verify /api/status returns active version 0.16.0 and commercial towers are seeded."""
     from meshscout import __version__
 
     status_resp = client.get("/api/status")
@@ -1504,7 +1504,7 @@ def test_version_dynamic_status_and_commercial_towers_seeded(client: TestClient)
     status_data = status_resp.json()
     assert status_data["ok"] is True
     assert status_data["version"] == __version__
-    assert status_data["version"] == "0.15.0"
+    assert status_data["version"] == "0.16.0"
 
     # Verify commercial towers (communications_tower) are present for layer toggle
     comm_resp = client.get("/api/towers/search?types=communications_tower")

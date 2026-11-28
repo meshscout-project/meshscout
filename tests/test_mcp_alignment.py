@@ -60,8 +60,8 @@ def test_no_unbound_mcp_handlers() -> None:
     server = MeshScoutMCPServer()
     manifest_tool_names = [t["name"] for t in MCP_TOOLS_MANIFEST]
 
-    assert len(manifest_tool_names) == 15, (
-        f"Expected 15 MCP tools, found {len(manifest_tool_names)}."
+    assert len(manifest_tool_names) == 16, (
+        f"Expected 16 MCP tools, found {len(manifest_tool_names)}."
     )
 
     for tool_name in manifest_tool_names:

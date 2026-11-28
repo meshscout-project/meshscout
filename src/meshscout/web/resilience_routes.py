@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,38 @@ class CotExportRequest(BaseModel):
     region: str = Field(default="vt_chittenden")
     site_ids: Optional[List[str]] = Field(default=None)
     stale_minutes: int = Field(default=60, ge=1)
+
+
+class TieredFabricRequest(BaseModel):
+    """JSON body for POST /api/v1/topology/fabric."""
+
+    region: str = Field(default="vt_chittenden")
+    target_coverage: float = Field(default=0.85, gt=0.0, le=1.0)
+    min_backhaul_margin_db: float = Field(default=6.0)
+    directional_gain_dbi: float = Field(default=9.0)
+    access_freq_mhz: float = Field(default=915.0, gt=0.0)
+    backhaul_freq_mhz: float = Field(default=906.875, gt=0.0)
+    vertical_sep_m: float = Field(default=3.0, ge=0.0)
+
+
+class CoSiteDesenseRequest(BaseModel):
+    """JSON body for POST /api/v1/rf/cosite-desense."""
+
+    site_id: str = Field(..., min_length=1)
+    access_freq_mhz: float = Field(default=915.0, gt=0.0)
+    backhaul_freq_mhz: float = Field(default=906.875, gt=0.0)
+    vertical_sep_m: float = Field(default=3.0, ge=0.0)
+    filter_rejection_db: float = Field(default=0.0, ge=0.0)
+    tx_power_dbm: float = Field(default=22.0)
+
+
+def _raise_for_failed_command(res: Dict[str, Any]) -> None:
+    """Raise an HTTPException mapped from a failed command payload."""
+    error = res.get("error")
+    err_code = error.get("code", "") if isinstance(error, dict) else ""
+    if err_code in ("SITE_NOT_FOUND", "EMPTY_TOPOLOGY"):
+        raise HTTPException(status_code=404, detail=res["error"])
+    raise HTTPException(status_code=400, detail=error)
 
 
 def build_resilience_router() -> APIRouter:
@@ -168,6 +200,42 @@ def build_resilience_router() -> APIRouter:
         status_code = 413 if err_code == "CSV_LIMIT_EXCEEDED" else 400
         return JSONResponse(status_code=status_code, content=res)
 
+    @sub_router.post("/api/v1/topology/fabric")
+    def post_topology_fabric_endpoint(
+        body: Optional[TieredFabricRequest] = None,
+    ) -> Dict[str, Any]:
+        """Plan a two-tier directional trunk and backhaul-viable valley infill RF fabric."""
+        req = body or TieredFabricRequest()
+        res = commands.plan_tiered_rf_fabric(
+            region=req.region,
+            target_coverage=req.target_coverage,
+            min_backhaul_margin_db=req.min_backhaul_margin_db,
+            directional_gain_dbi=req.directional_gain_dbi,
+            access_freq_mhz=req.access_freq_mhz,
+            backhaul_freq_mhz=req.backhaul_freq_mhz,
+            vertical_sep_m=req.vertical_sep_m,
+        )
+        if not res.get("ok"):
+            _raise_for_failed_command(res)
+        return res
+
+    @sub_router.post("/api/v1/rf/cosite-desense")
+    def post_rf_cosite_desense_endpoint(
+        body: CoSiteDesenseRequest,
+    ) -> Dict[str, Any]:
+        """Evaluate pairwise co-site broadband noise desense and RX compression risk."""
+        res = commands.evaluate_site_cosite_desense(
+            site_id=body.site_id,
+            access_freq_mhz=body.access_freq_mhz,
+            backhaul_freq_mhz=body.backhaul_freq_mhz,
+            vertical_sep_m=body.vertical_sep_m,
+            filter_rejection_db=body.filter_rejection_db,
+            tx_power_dbm=body.tx_power_dbm,
+        )
+        if not res.get("ok"):
+            _raise_for_failed_command(res)
+        return res
+
     return sub_router
 
 
@@ -175,8 +243,10 @@ router: APIRouter = build_resilience_router()
 
 __all__ = [
     "BackboneResilienceRequest",
+    "CoSiteDesenseRequest",
     "CotExportRequest",
     "MAX_CSV_UPLOAD_BYTES",
+    "TieredFabricRequest",
     "build_resilience_router",
     "router",
 ]

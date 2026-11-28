@@ -2,7 +2,7 @@
 
 Provides a zero-dependency JSON-RPC 2.0 MCP server (`MeshScoutMCPServer`) and an
 optional FastMCP compatibility wrapper when the `mcp` package is installed.
-Exposes fifteen tools:
+Exposes sixteen tools:
   1. `scout_repeater_sites`
   2. `evaluate_link_budget`
   3. `inspect_site_feasibility`
@@ -18,6 +18,7 @@ Exposes fifteen tools:
   13. `advise_eirp`
   14. `list_region_packs`
   15. `evaluate_backbone_resilience`
+  16. `plan_tiered_rf_fabric`
 
 Exposes eight MCP resources:
   - `meshscout://sites/all`
@@ -65,6 +66,7 @@ from meshscout.commands import (
     evaluate_backbone_resilience as evaluate_backbone_resilience,
     evaluate_link_budget as evaluate_link_budget,
     inspect_site_feasibility as inspect_site_feasibility,
+    plan_tiered_rf_fabric as plan_tiered_rf_fabric,
     load_regional_fixtures as load_regional_fixtures,
     scout_repeater_sites as scout_repeater_sites,
 )
@@ -1500,6 +1502,53 @@ MCP_TOOLS_MANIFEST: List[Dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "plan_tiered_rf_fabric",
+        "description": (
+            "Plan a two-tier directional trunk and backhaul-viable valley infill RF fabric with co-site desense checks."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "region": {
+                    "type": "string",
+                    "default": "vt_chittenden",
+                    "description": "Target regional fixture or county basin identifier",
+                },
+                "target_coverage": {
+                    "type": "number",
+                    "default": 0.85,
+                    "description": "Target weighted ground coverage fraction (0.0 to 1.0]",
+                },
+                "min_backhaul_margin_db": {
+                    "type": "number",
+                    "default": 6.0,
+                    "description": "Minimum two-way backhaul uplink margin in dB",
+                },
+                "directional_gain_dbi": {
+                    "type": "number",
+                    "default": 9.0,
+                    "description": "Directional trunk antenna gain in dBi",
+                },
+                "access_freq_mhz": {
+                    "type": "number",
+                    "default": 915.0,
+                    "description": "Infill access tier frequency in MHz",
+                },
+                "backhaul_freq_mhz": {
+                    "type": "number",
+                    "default": 906.875,
+                    "description": "Backhaul bridge tier frequency in MHz",
+                },
+                "vertical_sep_m": {
+                    "type": "number",
+                    "default": 3.0,
+                    "description": "Vertical antenna separation in meters for co-site isolation",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 MCP_RESOURCES_MANIFEST: List[Dict[str, Any]] = [
@@ -1762,6 +1811,7 @@ class MeshScoutMCPServer:
             "advise_eirp": advise_eirp,
             "list_region_packs": self._dispatch_list_region_packs,
             "evaluate_backbone_resilience": evaluate_backbone_resilience,
+            "plan_tiered_rf_fabric": plan_tiered_rf_fabric,
         }
 
     def _dispatch_manage_living_mesh_state(self, **kwargs: Any) -> Dict[str, Any]:
@@ -2123,6 +2173,11 @@ DOMAIN_CAPABILITY_MAP: Dict[str, Dict[str, Any]] = {
         "resources": [],
         "description": "Tarjan SPOF articulation/bridge analysis, standby relay healing ranker, and winter rollout BOM estimation",
     },
+    "core.fabric": {
+        "tools": ["plan_tiered_rf_fabric"],
+        "resources": [],
+        "description": "Two-tier directional trunk and backhaul-viable valley infill RF fabric planning with co-site desense evaluation",
+    },
 }
 
 
@@ -2205,6 +2260,7 @@ def create_fastmcp_app(host: str = "127.0.0.1", port: int = 8000) -> Any:
         mcp.tool()(advise_eirp)
         mcp.tool()(list_region_packs)
         mcp.tool()(evaluate_backbone_resilience)
+        mcp.tool()(plan_tiered_rf_fabric)
 
         @mcp.resource("meshscout://sites/all", mime_type="application/json")
         def resource_sites_all() -> str:

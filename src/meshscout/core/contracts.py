@@ -95,6 +95,29 @@ class ElevationProfile(BaseModel):
     points: List[ElevationPoint] = Field(default_factory=list, description="Ordered terrain elevation samples")
 
 
+class RadiationClass(str, Enum):
+    """Antenna radiation pattern classification."""
+    OMNI = "omni"
+    SECTOR = "sector"
+    DIRECTIONAL = "directional"
+
+
+class InterfaceTier(str, Enum):
+    """Network role tier for a site radio interface."""
+    ACCESS_INFILL = "access_infill"
+    BACKHAUL_BRIDGE = "backhaul_bridge"
+
+
+class AntennaPattern(BaseModel):
+    """Directional or sector antenna radiation pattern parameters."""
+    radiation_class: RadiationClass = Field(default=RadiationClass.OMNI, description="Antenna radiation pattern classification")
+    azimuth_deg: float = Field(default=0.0, ge=0.0, lt=360.0, description="Boresight azimuth in degrees clockwise from true north")
+    h_beamwidth_deg: float = Field(default=360.0, gt=0.0, le=360.0, description="Horizontal half-power (-3dB) beamwidth in degrees")
+    v_beamwidth_deg: Optional[float] = Field(default=None, gt=0.0, le=180.0, description="Optional vertical half-power (-3dB) beamwidth override in degrees")
+    downtilt_deg: float = Field(default=0.0, ge=-45.0, le=45.0, description="Physical or electrical antenna downtilt angle in degrees")
+    front_to_back_db: float = Field(default=0.0, ge=0.0, le=45.0, description="Front-to-back ratio attenuation in dB")
+
+
 class RadioConfig(BaseModel):
     """Radio hardware RF parameters."""
     frequency_mhz: float = Field(default=915.0, gt=0.0, description="Carrier frequency in MHz (e.g. 915.0)")
@@ -103,6 +126,7 @@ class RadioConfig(BaseModel):
     antenna_gain_dbi: float = Field(default=3.0, description="Antenna gain in dBi")
     cable_loss_db: float = Field(default=1.0, ge=0.0, description="Coaxial transmission line loss in dB")
     environmental_clutter_db: float = Field(default=0.0, ge=0.0, description="Environmental foliage and clutter loss in dB")
+    antenna_pattern: Optional[AntennaPattern] = Field(default=None, description="Optional directional or sector antenna pattern specification")
 
 
 class SiteRadioProfile(BaseModel):
@@ -110,6 +134,24 @@ class SiteRadioProfile(BaseModel):
     radio: RadioConfig
     noise_penalty_db: float = Field(default=0.0, ge=0.0, description="Local RF noise floor degradation in dB")
     hardware_preset: Optional[str] = None
+
+
+class RadioInterfaceSpec(BaseModel):
+    """Single radio interface specification mounted at a multi-interface site."""
+    interface_id: str = Field(..., min_length=1, description="Unique interface identifier on the site")
+    tier: InterfaceTier = Field(default=InterfaceTier.ACCESS_INFILL, description="Functional network tier of this radio interface")
+    radio: RadioConfig = Field(default_factory=RadioConfig, description="Radio transceiver and antenna hardware configuration")
+    mast_mount_m: Optional[float] = Field(default=None, ge=0.0, description="Optional interface-specific mount height above ground in meters")
+    filter_rejection_db: float = Field(default=0.0, ge=0.0, description="Cavity or bandpass filter out-of-band rejection in dB")
+    bridge_group: Optional[str] = None
+    protocol_family: Optional[str] = None
+
+
+class MultiInterfaceSiteProfile(BaseModel):
+    """Multi-interface site RF profile aggregating access and backhaul radios."""
+    site_id: str = Field(..., min_length=1, description="Associated candidate site ID")
+    interfaces: List[RadioInterfaceSpec] = Field(..., min_length=1, description="Radio interfaces mounted at this site")
+    noise_penalty_db: float = Field(default=0.0, ge=0.0, description="Site-wide local RF noise floor degradation in dB")
 
 
 class DowntiltAnalysisResult(BaseModel):

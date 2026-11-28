@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, Literal, Optional, Tuple
 from pydantic import BaseModel, Field
 
-from meshscout.core.contracts import RadioConfig, Result, SiteRadioProfile, SiteType
+from meshscout.core.contracts import AntennaPattern, RadiationClass, RadioConfig, Result, SiteRadioProfile, SiteType
 
 
 class HardwarePreset(BaseModel):
@@ -26,11 +26,11 @@ class HardwarePreset(BaseModel):
 
 
 class ProtocolProfile(BaseModel):
-    """LoRa modulation and receiver sensitivity profile for Meshtastic, MeshCore, or Reticulum."""
+    """LoRa modulation and receiver sensitivity profile for Meshtastic, MeshCore, Reticulum, or GenericLoRa."""
 
     profile_id: str = Field(..., min_length=1, description="Unique identifier for the protocol profile")
-    network_family: Literal["Meshtastic", "MeshCore", "Reticulum"] = Field(
-        ..., description="Mesh protocol ecosystem ('Meshtastic', 'MeshCore', or 'Reticulum')"
+    network_family: Literal["Meshtastic", "MeshCore", "Reticulum", "GenericLoRa"] = Field(
+        ..., description="Mesh protocol ecosystem ('Meshtastic', 'MeshCore', 'Reticulum', or 'GenericLoRa')"
     )
     label: str = Field(..., min_length=1, description="Human-readable modulation preset name")
     frequency_mhz: float = Field(default=915.0, gt=0.0, description="US915 ISM center frequency in MHz")
@@ -199,6 +199,24 @@ PROTOCOL_PROFILES: Dict[str, ProtocolProfile] = {
         spreading_factor=8,
         rx_sensitivity_dbm=-124.0,
     ),
+    "GENERIC_LORA_WIDE_500": ProtocolProfile(
+        profile_id="GENERIC_LORA_WIDE_500",
+        network_family="GenericLoRa",
+        label="Generic LoRa 500 kHz High-Rate Trunk",
+        frequency_mhz=915.0,
+        bandwidth_khz=500.0,
+        spreading_factor=7,
+        rx_sensitivity_dbm=-120.5,
+    ),
+    "GENERIC_LORA_LONG_62K5": ProtocolProfile(
+        profile_id="GENERIC_LORA_LONG_62K5",
+        network_family="GenericLoRa",
+        label="Generic LoRa 62.5 kHz Long-Range",
+        frequency_mhz=915.0,
+        bandwidth_khz=62.5,
+        spreading_factor=12,
+        rx_sensitivity_dbm=-141.5,
+    ),
 }
 
 MESHTASTIC_BAND_PLANS: Dict[str, Tuple[float, float]] = {
@@ -278,6 +296,49 @@ SITE_NOISE_PENALTIES_DB: Dict[SiteType, float] = {
     SiteType.CUSTOM: 1.0,
 }
 
+ANTENNA_PATTERN_PRESETS: Dict[str, AntennaPattern] = {
+    "OMNI_360": AntennaPattern(
+        radiation_class=RadiationClass.OMNI,
+        azimuth_deg=0.0,
+        h_beamwidth_deg=360.0,
+        v_beamwidth_deg=None,
+        downtilt_deg=0.0,
+        front_to_back_db=0.0,
+    ),
+    "SECTOR_VALLEY_120": AntennaPattern(
+        radiation_class=RadiationClass.SECTOR,
+        azimuth_deg=0.0,
+        h_beamwidth_deg=120.0,
+        v_beamwidth_deg=18.0,
+        downtilt_deg=2.0,
+        front_to_back_db=18.0,
+    ),
+    "SECTOR_CORRIDOR_90": AntennaPattern(
+        radiation_class=RadiationClass.SECTOR,
+        azimuth_deg=0.0,
+        h_beamwidth_deg=90.0,
+        v_beamwidth_deg=16.0,
+        downtilt_deg=1.5,
+        front_to_back_db=20.0,
+    ),
+    "YAGI_BACKHAUL_65": AntennaPattern(
+        radiation_class=RadiationClass.DIRECTIONAL,
+        azimuth_deg=0.0,
+        h_beamwidth_deg=65.0,
+        v_beamwidth_deg=55.0,
+        downtilt_deg=0.0,
+        front_to_back_db=16.0,
+    ),
+    "YAGI_HIGHGAIN_38": AntennaPattern(
+        radiation_class=RadiationClass.DIRECTIONAL,
+        azimuth_deg=0.0,
+        h_beamwidth_deg=38.0,
+        v_beamwidth_deg=34.0,
+        downtilt_deg=0.0,
+        front_to_back_db=22.0,
+    ),
+}
+
 
 def get_site_noise_penalty_db(site_type: SiteType) -> float:
     """Return local RF noise floor degradation penalty in dB for a high-site category."""
@@ -288,8 +349,11 @@ def build_radio_config(
     hardware_id: str = "RAK4631_SOLAR",
     protocol_id: str = "MESHTASTIC_LONGFAST",
     season_id: str = "WINTER_LEAF_OFF",
+    antenna_preset_id: Optional[str] = None,
+    azimuth_deg: float = 0.0,
+    downtilt_deg: Optional[float] = None,
 ) -> Result[RadioConfig]:
-    """Build a unified `RadioConfig` from hardware, protocol, and seasonal presets."""
+    """Build a unified `RadioConfig` from hardware, protocol, seasonal, and optional antenna presets."""
     hw_key = hardware_id.strip().upper()
     if hw_key not in HARDWARE_PRESETS:
         return Result.fail(
@@ -312,6 +376,20 @@ def build_radio_config(
             message=f"Unknown seasonal profile '{season_id}'. Available: {sorted(SEASONAL_PROFILES.keys())}",
         )
 
+    antenna_pattern: Optional[AntennaPattern] = None
+    if antenna_preset_id is not None:
+        antenna_key = antenna_preset_id.strip().upper()
+        if antenna_key not in ANTENNA_PATTERN_PRESETS:
+            return Result.fail(
+                code="UNKNOWN_ANTENNA_PRESET",
+                message=f"Unknown antenna preset '{antenna_preset_id}'. Available: {sorted(ANTENNA_PATTERN_PRESETS.keys())}",
+            )
+        base = ANTENNA_PATTERN_PRESETS[antenna_key]
+        updates: Dict[str, Any] = {"azimuth_deg": float(azimuth_deg) % 360.0}
+        if downtilt_deg is not None:
+            updates["downtilt_deg"] = float(downtilt_deg)
+        antenna_pattern = base.model_copy(update=updates)
+
     hw = HARDWARE_PRESETS[hw_key]
     proto = PROTOCOL_PROFILES[proto_key]
     season = SEASONAL_PROFILES[season_key]
@@ -324,6 +402,7 @@ def build_radio_config(
             antenna_gain_dbi=hw.antenna_gain_dbi,
             cable_loss_db=hw.cable_loss_db,
             environmental_clutter_db=season.canopy_loss_db,
+            antenna_pattern=antenna_pattern,
         )
     )
 
@@ -370,11 +449,14 @@ def resolve_site_radio_profile(
 
 
 def list_all_presets() -> Dict[str, Any]:
-    """Return a JSON-serializable dictionary of all hardware, protocol, seasonal, and client presets."""
+    """Return a JSON-serializable dictionary of all hardware, protocol, seasonal, antenna, and client presets."""
     return {
         "hardware_presets": {k: v.model_dump() for k, v in HARDWARE_PRESETS.items()},
         "protocol_profiles": {k: v.model_dump() for k, v in PROTOCOL_PROFILES.items()},
         "seasonal_profiles": {k: v.model_dump() for k, v in SEASONAL_PROFILES.items()},
+        "antenna_pattern_presets": {
+            k: v.model_dump() for k, v in ANTENNA_PATTERN_PRESETS.items()
+        },
         "client_environment_profiles": {
             k: v.model_dump() for k, v in CLIENT_ENVIRONMENT_PROFILES.items()
         },

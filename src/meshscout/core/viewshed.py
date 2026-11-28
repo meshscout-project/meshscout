@@ -21,6 +21,10 @@ from meshscout.core.contracts import (
     Result,
     SiteCandidate,
 )
+from meshscout.core.itm import (
+    calculate_azimuth_pattern_loss_db,
+    forward_azimuth_deg,
+)
 
 # Physical constants for RF propagation and geodesy
 EARTH_RADIUS_KM: float = 6371.0
@@ -254,6 +258,7 @@ def _compute_directional_link_metrics(
     client_env_loss_db: float = 0.0,
     site_noise_penalty_db: float = 0.0,
     direction: str = "downlink",
+    az_loss_db: float = 0.0,
 ) -> Tuple[float, float, float, float]:
     """Compute directional (rx_power_dbm, margin_db, down_margin_db, up_margin_db)."""
     c_radio = client_radio if client_radio is not None else active_radio
@@ -262,6 +267,7 @@ def _compute_directional_link_metrics(
         + c_radio.antenna_gain_dbi
         - active_radio.cable_loss_db
         - c_radio.cable_loss_db
+        - az_loss_db
     )
     clutter_db = (
         max(active_radio.environmental_clutter_db, c_radio.environmental_clutter_db)
@@ -339,10 +345,21 @@ def evaluate_target_coverage(
     tx_alt_m = repeater.location.elevation_m + repeater.mast_height_m
     rx_alt_m = target.coordinate.elevation_m + effective_rx_height_m
 
+    az_fwd = forward_azimuth_deg(repeater.location, target.coordinate)
+    az_loss_db = calculate_azimuth_pattern_loss_db(az_fwd, radio.antenna_pattern)
+    if client_radio is not None and client_radio.antenna_pattern is not None:
+        az_rev = forward_azimuth_deg(target.coordinate, repeater.location)
+        az_loss_db += calculate_azimuth_pattern_loss_db(az_rev, client_radio.antenna_pattern)
+
     # Co-located or very close target point
     if total_dist_m <= 1.0 or len(points) < 2:
         if is_symmetric_default:
-            rx_power_dbm = radio.tx_power_dbm + 2.0 * radio.antenna_gain_dbi - 2.0 * radio.cable_loss_db
+            rx_power_dbm = (
+                radio.tx_power_dbm
+                + 2.0 * radio.antenna_gain_dbi
+                - 2.0 * radio.cable_loss_db
+                - az_loss_db
+            )
             link_margin_db = rx_power_dbm - radio.rx_sensitivity_dbm
             down_margin_out: Optional[float] = None
             up_margin_out: Optional[float] = None
@@ -355,6 +372,7 @@ def evaluate_target_coverage(
                 client_env_loss_db=client_env_loss_db,
                 site_noise_penalty_db=site_noise_penalty_db,
                 direction=direction,
+                az_loss_db=az_loss_db,
             )
             down_margin_out = round(down_m, 2) if client_radio is not None else None
             up_margin_out = round(up_m, 2) if client_radio is not None else None
@@ -415,7 +433,7 @@ def evaluate_target_coverage(
     diffraction_db = _knife_edge_diffraction_db(max_nu)
 
     if is_symmetric_default:
-        total_loss_db = fspl_db + diffraction_db + radio.environmental_clutter_db
+        total_loss_db = fspl_db + diffraction_db + radio.environmental_clutter_db + az_loss_db
         rx_power_dbm = (
             radio.tx_power_dbm
             + 2.0 * radio.antenna_gain_dbi
@@ -434,6 +452,7 @@ def evaluate_target_coverage(
             client_env_loss_db=client_env_loss_db,
             site_noise_penalty_db=site_noise_penalty_db,
             direction=direction,
+            az_loss_db=az_loss_db,
         )
         down_margin_out = round(down_m, 2) if client_radio is not None else None
         up_margin_out = round(up_m, 2) if client_radio is not None else None
@@ -653,6 +672,7 @@ def compute_radial_viewshed_polygon(
         az_rad = math.radians(az_deg)
         sin_az = math.sin(az_rad)
         cos_az = math.cos(az_rad)
+        az_loss_db = calculate_azimuth_pattern_loss_db(az_deg, active_radio.antenna_pattern)
 
         max_horizon_elev_angle = -1e9
         d_ridge_m = 0.0
@@ -693,7 +713,7 @@ def compute_radial_viewshed_polygon(
                 diff_loss_db = _knife_edge_diffraction_db(nu)
                 fspl_db = _free_space_path_loss_db(dist_km, active_radio.frequency_mhz)
                 if is_symmetric_default:
-                    total_loss_db = fspl_db + diff_loss_db + active_radio.environmental_clutter_db
+                    total_loss_db = fspl_db + diff_loss_db + active_radio.environmental_clutter_db + az_loss_db
                     rx_power_dbm = (
                         active_radio.tx_power_dbm
                         + 2.0 * active_radio.antenna_gain_dbi
@@ -710,6 +730,7 @@ def compute_radial_viewshed_polygon(
                         client_env_loss_db=client_env_loss_db,
                         site_noise_penalty_db=site_noise_penalty_db,
                         direction=direction,
+                        az_loss_db=az_loss_db,
                     )
                 if margin_db < min_margin_db and diff_cutoff_km == effective_max_km:
                     diff_cutoff_km = dist_km
@@ -723,6 +744,7 @@ def compute_radial_viewshed_polygon(
                         - 2.0 * active_radio.cable_loss_db
                         - fspl_db
                         - active_radio.environmental_clutter_db
+                        - az_loss_db
                         - active_radio.rx_sensitivity_dbm
                     )
                 else:
@@ -734,6 +756,7 @@ def compute_radial_viewshed_polygon(
                         client_env_loss_db=client_env_loss_db,
                         site_noise_penalty_db=site_noise_penalty_db,
                         direction=direction,
+                        az_loss_db=az_loss_db,
                     )
                 if margin_db < min_margin_db:
                     if los_cutoff_km == effective_max_km:

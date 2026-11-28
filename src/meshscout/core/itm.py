@@ -11,9 +11,12 @@ from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from meshscout.core.contracts import (
+    AntennaPattern,
+    Coordinate,
     DowntiltAnalysisResult,
     ElevationProfile,
     LinkBudgetResult,
+    RadiationClass,
     RadioConfig,
     ReachabilityState,
     Result,
@@ -299,12 +302,42 @@ def bullington_diffraction_loss_db(
     return (diff_loss_db, float(min_fresnel_ratio), has_los)
 
 
+def forward_azimuth_deg(c1: Coordinate, c2: Coordinate) -> float:
+    """Compute spherical initial forward bearing in degrees [0.0, 360.0) from c1 to c2."""
+    if abs(c1.lat - c2.lat) < 1e-12 and abs(c1.lon - c2.lon) < 1e-12:
+        return 0.0
+    lat1, lat2 = math.radians(c1.lat), math.radians(c2.lat)
+    dlon = math.radians(c2.lon - c1.lon)
+    y = math.sin(dlon) * math.cos(lat2)
+    x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+    return round((math.degrees(math.atan2(y, x)) + 360.0) % 360.0, 4) % 360.0
+
+
+def calculate_azimuth_pattern_loss_db(
+    bearing_deg: float, pattern: Optional[AntennaPattern]
+) -> float:
+    """Calculate horizontal azimuth pattern attenuation in dB relative to antenna boresight."""
+    if (
+        pattern is None
+        or pattern.radiation_class == RadiationClass.OMNI
+        or pattern.h_beamwidth_deg >= 360.0
+    ):
+        return 0.0
+    delta = abs(((bearing_deg - pattern.azimuth_deg + 180.0) % 360.0) - 180.0)
+    return round(
+        min(12.0 * ((delta / max(pattern.h_beamwidth_deg, 1.0)) ** 2), pattern.front_to_back_db),
+        2,
+    )
+
+
 def calculate_antenna_downtilt(
     source_site: SiteCandidate,
     target_site: SiteCandidate,
     distance_km: float,
     antenna_gain_dbi: float = 5.8,
     k_factor: float = 4.0 / 3.0,
+    mechanical_downtilt_deg: float = 0.0,
+    v_beamwidth_override_deg: Optional[float] = None,
 ) -> DowntiltAnalysisResult:
     """Calculate mechanical look-down angle and antenna vertical beamwidth alignment.
 
@@ -326,32 +359,44 @@ def calculate_antenna_downtilt(
     look_angle_rad = math.atan2(delta_h - earth_drop_m, total_d_m)
     look_down_angle_deg = round(math.degrees(look_angle_rad), 2)
 
-    # Half-power vertical beamwidth (-3dB) estimation for standard collinear omni
-    gain = max(0.0, antenna_gain_dbi)
-    if gain <= 2.15:
-        beamwidth_deg = 78.0
-    elif gain <= 3.5:
-        beamwidth_deg = 55.0
-    elif gain <= 6.5:
-        beamwidth_deg = 20.0
-    elif gain <= 8.5:
-        beamwidth_deg = 10.0
+    if v_beamwidth_override_deg is not None:
+        beamwidth_deg = float(v_beamwidth_override_deg)
     else:
-        beamwidth_deg = 6.0
+        # Half-power vertical beamwidth (-3dB) estimation for standard collinear omni
+        gain = max(0.0, antenna_gain_dbi)
+        if gain <= 2.15:
+            beamwidth_deg = 78.0
+        elif gain <= 3.5:
+            beamwidth_deg = 55.0
+        elif gain <= 6.5:
+            beamwidth_deg = 20.0
+        elif gain <= 8.5:
+            beamwidth_deg = 10.0
+        else:
+            beamwidth_deg = 6.0
 
     half_beamwidth = beamwidth_deg / 2.0
-    is_overshooting = look_down_angle_deg > half_beamwidth
+    effective_angle = (
+        abs(look_down_angle_deg - mechanical_downtilt_deg)
+        if mechanical_downtilt_deg != 0.0
+        else look_down_angle_deg
+    )
+    is_overshooting = effective_angle > half_beamwidth
 
     if is_overshooting:
-        ratio = look_down_angle_deg / half_beamwidth
+        ratio = effective_angle / half_beamwidth
         pattern_attenuation_db = round(min(25.0, 3.0 * (ratio ** 2)), 1)
         rec_downtilt = round(look_down_angle_deg, 1)
         rec_text = (
-            f"Steep look-down ({look_down_angle_deg}°) exceeds {antenna_gain_dbi:.1f}dBi vertical beamwidth "
-            f"({beamwidth_deg}°). Main lobe shoots over target. Apply {rec_downtilt}° mechanical downtilt "
-            f"or down-spec to a 3dBi–5.8dBi wide-beamwidth omni."
+            ""
+            if mechanical_downtilt_deg != 0.0
+            else (
+                f"Steep look-down ({look_down_angle_deg}°) exceeds {antenna_gain_dbi:.1f}dBi vertical beamwidth "
+                f"({beamwidth_deg}°). Main lobe shoots over target. Apply {rec_downtilt}° mechanical downtilt "
+                f"or down-spec to a 3dBi–5.8dBi wide-beamwidth omni."
+            )
         )
-    elif look_down_angle_deg > 1.5:
+    elif effective_angle > 1.5:
         pattern_attenuation_db = 0.5
         rec_downtilt = 0.0
         rec_text = f"Beam aligned within {antenna_gain_dbi:.1f}dBi vertical coverage cone ({beamwidth_deg}°)."
@@ -445,6 +490,9 @@ def evaluate_point_to_point_link(
             or client_env_loss_db > 0.0
         )
 
+        az_fwd = forward_azimuth_deg(profile.source_site.location, profile.target_site.location)
+        az_rev = forward_azimuth_deg(profile.target_site.location, profile.source_site.location)
+
         if not is_asymmetric:
             total_path_loss_db = round(fspl_db + diffraction_loss_db + radio.environmental_clutter_db, 4)
 
@@ -454,6 +502,16 @@ def evaluate_point_to_point_link(
                 distance_km=profile.distance_km,
                 antenna_gain_dbi=radio.antenna_gain_dbi,
                 k_factor=k_factor,
+                mechanical_downtilt_deg=(
+                    radio.antenna_pattern.downtilt_deg if radio.antenna_pattern is not None else 0.0
+                ),
+                v_beamwidth_override_deg=(
+                    radio.antenna_pattern.v_beamwidth_deg if radio.antenna_pattern is not None else None
+                ),
+            )
+            az_loss_db = (
+                calculate_azimuth_pattern_loss_db(az_fwd, radio.antenna_pattern)
+                + calculate_azimuth_pattern_loss_db(az_rev, radio.antenna_pattern)
             )
 
             # Link budget equation:
@@ -462,6 +520,7 @@ def evaluate_point_to_point_link(
                 (2.0 * radio.antenna_gain_dbi)
                 - (2.0 * radio.cable_loss_db)
                 - downtilt.pattern_attenuation_db
+                - az_loss_db
             )
             rx_power_dbm = round(radio.tx_power_dbm + system_gain_db - total_path_loss_db, 4)
             link_margin_db = round(rx_power_dbm - radio.rx_sensitivity_dbm, 4)
@@ -495,6 +554,12 @@ def evaluate_point_to_point_link(
             distance_km=profile.distance_km,
             antenna_gain_dbi=radio.antenna_gain_dbi,
             k_factor=k_factor,
+            mechanical_downtilt_deg=(
+                radio.antenna_pattern.downtilt_deg if radio.antenna_pattern is not None else 0.0
+            ),
+            v_beamwidth_override_deg=(
+                radio.antenna_pattern.v_beamwidth_deg if radio.antenna_pattern is not None else None
+            ),
         )
         dt_tgt = calculate_antenna_downtilt(
             source_site=profile.target_site,
@@ -502,8 +567,22 @@ def evaluate_point_to_point_link(
             distance_km=profile.distance_km,
             antenna_gain_dbi=eff_target_radio.antenna_gain_dbi,
             k_factor=k_factor,
+            mechanical_downtilt_deg=(
+                eff_target_radio.antenna_pattern.downtilt_deg
+                if eff_target_radio.antenna_pattern is not None
+                else 0.0
+            ),
+            v_beamwidth_override_deg=(
+                eff_target_radio.antenna_pattern.v_beamwidth_deg
+                if eff_target_radio.antenna_pattern is not None
+                else None
+            ),
         )
         pattern_loss_db = dt_src.pattern_attenuation_db + dt_tgt.pattern_attenuation_db
+        az_loss_db = (
+            calculate_azimuth_pattern_loss_db(az_fwd, radio.antenna_pattern)
+            + calculate_azimuth_pattern_loss_db(az_rev, eff_target_radio.antenna_pattern)
+        )
         downtilt = dt_tgt if dt_tgt.pattern_attenuation_db > dt_src.pattern_attenuation_db else dt_src
 
         passive_gain_db = (
@@ -512,6 +591,7 @@ def evaluate_point_to_point_link(
             - radio.cable_loss_db
             - eff_target_radio.cable_loss_db
             - pattern_loss_db
+            - az_loss_db
         )
 
         downlink_rx_dbm = round(radio.tx_power_dbm + passive_gain_db - total_path_loss_db, 4)

@@ -17,16 +17,16 @@ All modules exchange validated Pydantic v2 schemas in WGS84 (`EPSG:4326`) coordi
 
 ### Functional Core Modules (`meshscout.core`)
 
-- `contracts.py`: Defines `Coordinate`, `RegionalBounds`, `SiteCandidate`, `ElevationProfile`, `RadioConfig`, `LinkBudgetResult`, and `Result[T]`.
+- `contracts.py`: Defines `Coordinate`, `SiteCandidate`, `RadioConfig`, `AntennaPattern`, `RadioInterfaceSpec`, `MultiInterfaceSiteProfile`, and `Result[T]`.
 - `fresnel.py`: Computes First Fresnel Zone clearance and Earth curvature bulge under $k=4/3$ atmospheric refraction.
 - `itm.py`: Implements the Longley-Rice ITM point-to-point preprocessor (`qlrpfl`) and Bullington knife-edge diffraction (`ITU-R P.526`).
 - `viewshed.py`: Evaluates point-to-multipoint radial viewsheds across target valley grids without external GIS dependencies.
 - `optimizer.py`: Solves the weighted minimum set-cover problem to cover target basins with minimal repeater cost.
 - `scorer.py`: Scores civic access viability and detects 850-940 MHz front-end LNA overload requiring bandpass cavity filters.
-- `presets.py`: Provides Meshtastic and MeshCore protocol profiles, radio hardware presets, and seasonal foliage attenuation models.
+- `presets.py`: Provides Meshtastic, MeshCore, Reticulum, and `GenericLoRa` protocol profiles, hardware presets, `AntennaPattern` presets, and foliage models.
 - `registry.py`: Manages the SQLite WAL `LivingMeshRegistry`, last-used location persistence, and 360-degree home reach analysis.
 - `tower_registry.py`: Versioned SQLite spatial index (`SCHEMA_VERSION = 2`) utilizing R*Tree virtual tables (`towers_rtree`) and zoom-adaptive grid-cell decimation.
-- `regulatory.py`: Evaluates advisory conducted power, antenna gain, and EIRP limits under FCC Part 15.247 (US) and ISED RSS-247 (Canada) for 902-928 MHz ISM band operation.
+- `regulatory.py`: Evaluates EIRP and directional limits under FCC Part 15.247, ISED RSS-247, ETSI EN 300 220, and ACMA LIPD.
 - `packs.py`: Regional pack export, reference-counted installation/uninstallation, SHA256 integrity verification, and manifest generation.
 - `solar.py`: Simulates winter peak sun hours, sub-zero BMS charging lockout, and battery chemistry resilience (LTO vs LiFePO4).
 - `telemetry.py`: Parses Meshtastic wardriving CSV/JSON packet logs and auto-calibrates empirical clutter loss against Longley-Rice models.
@@ -35,6 +35,7 @@ All modules exchange validated Pydantic v2 schemas in WGS84 (`EPSG:4326`) coordi
 - `corridor.py`: Multi-hop linear backhaul corridor evaluation, cumulative distance, bottleneck link identification, and end-to-end RF feasibility.
 - `staging.py`: Offline region boundary expansion, DEM tile estimation, and field-kit staging.
 - `resilience.py`: Runs Tarjan SPOF graph checks, ranks standby healing relays, and prices rollout BOM kits.
+- `fabric.py`: Plans two-tier infill-to-trunk fabrics, multi-interface bridge routes, directional downtilt, and co-site desense checks.
 
 ### Imperative Shell, Adapters, and Web Workbench (`meshscout.adapters`, `meshscout.web`)
 
@@ -107,6 +108,8 @@ MeshScout separates symmetric infrastructure links from asymmetric client reacha
 
 Multi-hop corridor evaluation scores per-site hardware presets in both directions and tracks the worst bidirectional hop margin. Client-origin mesh routing enforces two-way closure on every leg and rejects alligator relays that cannot hear handheld uplinks. Directional composite viewsheds model `downlink`, `uplink`, and `two_way` footprints alongside asymmetric inter-site backhaul links.
 
+Directional and sector `AntennaPattern` models apply boresight azimuth, beamwidth, downtilt, and front-to-back attenuation. Two-tier `core/fabric.py` planning routes multi-interface valley infill to trunk backhaul and checks co-site desense. Regulatory checks support omnidirectional P2MP and directional P2P modes across US, Canadian, EU ETSI, and Australian ACMA bands.
+
 ```powershell
 # Evaluate asymmetric repeater-to-handheld client link budget
 meshscout link --source 44.5437,-72.8143,1339.0 --target 44.4900,-73.1100,105.0 --mode client --client-env INDOOR_WINDOW
@@ -121,7 +124,7 @@ meshscout reach --lat 44.4900 --lon -73.1100 --client-preset SENSECAP_T1000E --c
 ### Model Context Protocol (MCP) Interface
 
 MeshScout provides a Day-0 compliant JSON-RPC 2.0 MCP server exposing:
-- **15 Tools**: `scout_repeater_sites`, `evaluate_link_budget`, `inspect_site_feasibility`, `advise_node_role_and_airtime`, `recommend_backhaul_architecture`, `provision_node_radio`, `simulate_winter_solar_survival`, `analyze_mesh_coverage_gaps`, `calibrate_empirical_clutter`, `generate_landowner_brief`, `stage_offline_field_kit`, `manage_living_mesh_state`, `advise_eirp`, `list_region_packs`, `evaluate_backbone_resilience`.
+- **16 Tools**: `scout_repeater_sites`, `evaluate_link_budget`, `inspect_site_feasibility`, `advise_node_role_and_airtime`, `recommend_backhaul_architecture`, `provision_node_radio`, `simulate_winter_solar_survival`, `analyze_mesh_coverage_gaps`, `calibrate_empirical_clutter`, `generate_landowner_brief`, `stage_offline_field_kit`, `manage_living_mesh_state`, `advise_eirp`, `list_region_packs`, `evaluate_backbone_resilience`, `plan_tiered_rf_fabric`.
 - **8 Resources**: `meshscout://sites/all`, `meshscout://presets/hardware`, `meshscout://presets/protocols`, `meshscout://state/living-mesh`, `meshscout://fixtures/vt_counties`, `meshscout://presets/site-architectures`, `meshscout://regulatory/north-america`, `meshscout://packs/installed`.
 - **3 Prompts**: `design_regional_emergency_backbone`, `audit_channel_contention`, `prepare_selectboard_pitch`.
 

@@ -11,23 +11,31 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from pydantic import ValidationError
+
 from meshscout.adapters.elevation import ElevationGrid, USGS3DEPElevationAdapter
 from meshscout.adapters.fcc_asr import FCCASRAdapter
 from meshscout.adapters.vt_vcgi import VCGIRegionalAdapter
+from meshscout.core.archetypes import SiteArchetype, classify_site_archetype
 from meshscout.core.composite_viewshed import compute_composite_viewshed
 from meshscout.core.contracts import (
     Coordinate,
+    InterfaceTier,
+    MultiInterfaceSiteProfile,
     RadioConfig,
+    RadioInterfaceSpec,
     RegionalBounds,
     SiteCandidate,
     SiteType,
 )
+from meshscout.core.fabric import evaluate_cosite_desense, solve_two_tier_fabric
 from meshscout.core.fresnel import analyze_fresnel_clearance
 from meshscout.core.itm import evaluate_point_to_point_link
 from meshscout.core.optimizer import solve_minimum_set_cover
 from meshscout.core.presets import CLIENT_ENVIRONMENT_PROFILES, build_radio_config
 from meshscout.core.regulatory import (
     RegulatoryDomain,
+    TransmissionMode,
     advise_eirp as core_advise_eirp,
     detect_regulatory_domain,
 )
@@ -631,16 +639,50 @@ def advise_eirp(
     frequency_mhz: float = 915.0,
     domain: Optional[str] = None,
     region: Optional[str] = None,
+    transmission_mode: str = "omni_p2mp",
+    bandwidth_khz: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Evaluate transmitter conducted power and EIRP limits against FCC Part 15.247 / ISED RSS-247 rules."""
-    reg_domain = resolve_regulatory_domain(domain=domain, region=region)
-    report = core_advise_eirp(
-        tx_power_dbm=float(tx_power_dbm),
-        antenna_gain_dbi=float(antenna_gain_dbi),
-        cable_loss_db=float(cable_loss_db),
-        frequency_mhz=float(frequency_mhz),
-        domain=reg_domain,
-    )
+    try:
+        mode_raw = (
+            transmission_mode.value
+            if isinstance(transmission_mode, TransmissionMode)
+            else str(transmission_mode).strip().lower()
+        )
+        mode_enum = TransmissionMode(mode_raw)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "error": {
+                "code": "INVALID_TRANSMISSION_MODE",
+                "message": str(exc),
+            },
+        }
+
+    try:
+        bw_val: Optional[float] = None
+        if bandwidth_khz is not None:
+            bw_val = float(bandwidth_khz)
+            if bw_val <= 0.0:
+                raise ValueError(f"bandwidth_khz must be greater than 0, got {bandwidth_khz}")
+        reg_domain = resolve_regulatory_domain(domain=domain, region=region)
+        report = core_advise_eirp(
+            tx_power_dbm=float(tx_power_dbm),
+            antenna_gain_dbi=float(antenna_gain_dbi),
+            cable_loss_db=float(cable_loss_db),
+            frequency_mhz=float(frequency_mhz),
+            domain=reg_domain,
+            transmission_mode=mode_enum,
+            bandwidth_khz=bw_val,
+        )
+    except (ValidationError, ValueError, TypeError) as exc:
+        return {
+            "ok": False,
+            "error": {
+                "code": "INVALID_EIRP_PARAMS",
+                "message": str(exc),
+            },
+        }
     res = report.model_dump(mode="json")
     res["ok"] = True
     return res
@@ -853,6 +895,194 @@ def import_sites_csv(csv_text: str) -> Dict[str, Any]:
     }
 
 
+def plan_tiered_rf_fabric(
+    region: str = "vt_chittenden",
+    target_coverage: float = 0.85,
+    min_backhaul_margin_db: float = 6.0,
+    directional_gain_dbi: float = 9.0,
+    access_freq_mhz: float = 915.0,
+    backhaul_freq_mhz: float = 906.875,
+    vertical_sep_m: float = 3.0,
+) -> Dict[str, Any]:
+    """Plan a two-tier directional trunk and backhaul-viable valley infill RF fabric."""
+    try:
+        bounds, sites = load_regional_fixtures(region)
+        if not sites:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "EMPTY_TOPOLOGY",
+                    "message": "No candidate sites matched selection.",
+                },
+            }
+
+        adapter = _build_offline_elevation_adapter(bounds)
+
+        def elev_fn(lat: float, lon: float) -> float:
+            r = adapter.get_elevation_at(lat, lon)
+            return (
+                float(r.value)
+                if (r.ok and r.value is not None)
+                else float(_synthetic_vermont_elevation_fn(lat, lon))
+            )
+
+        trunk = [
+            s
+            for s in sites
+            if classify_site_archetype(s) == SiteArchetype.ALPINE_MEGA_SUMMIT
+        ]
+        if not trunk:
+            trunk = [max(sites, key=lambda s: (s.location.elevation_m, s.site_id))]
+
+        trunk_ids = {s.site_id for s in trunk}
+        infill = [s for s in sites if s.site_id not in trunk_ids]
+
+        grid_res = generate_target_grid(bounds, lat_steps=4, lon_steps=4, elevation_fn=elev_fn)
+        targets = grid_res.value or []
+
+        rc_res = build_radio_config("RAK4631_SOLAR", "MESHTASTIC_LONGFAST")
+        if not rc_res.ok or rc_res.value is None:
+            return {
+                "ok": False,
+                "error": (
+                    rc_res.error.model_dump(mode="json")
+                    if rc_res.error
+                    else {"code": "INVALID_CONFIG", "message": "Failed to build base radio configuration"}
+                ),
+            }
+        radio = rc_res.value
+
+        viewsheds = [
+            r.value
+            for s in [*infill, *trunk]
+            if (r := compute_viewshed(s, targets, elevation_fn=elev_fn, radio=radio)).ok
+            and r.value is not None
+        ]
+
+        site_profiles: Dict[str, MultiInterfaceSiteProfile] = {
+            s.site_id: MultiInterfaceSiteProfile(
+                site_id=s.site_id,
+                interfaces=[
+                    RadioInterfaceSpec(
+                        interface_id="access_infill",
+                        tier=InterfaceTier.ACCESS_INFILL,
+                        radio=radio.model_copy(update={"frequency_mhz": float(access_freq_mhz)}),
+                        mast_mount_m=s.mast_height_m,
+                        bridge_group="trunk",
+                        protocol_family="Meshtastic",
+                    ),
+                    RadioInterfaceSpec(
+                        interface_id="backhaul_bridge",
+                        tier=InterfaceTier.BACKHAUL_BRIDGE,
+                        radio=radio.model_copy(
+                            update={
+                                "frequency_mhz": float(backhaul_freq_mhz),
+                                "antenna_gain_dbi": float(directional_gain_dbi),
+                            }
+                        ),
+                        mast_mount_m=s.mast_height_m + float(vertical_sep_m),
+                        bridge_group="trunk",
+                        protocol_family="MeshCore",
+                    ),
+                ],
+            )
+            for s in sites
+        }
+
+        res = solve_two_tier_fabric(
+            trunk,
+            viewsheds,
+            target_coverage_fraction=float(target_coverage),
+            elevation_fn=elev_fn,
+            min_backhaul_margin_db=float(min_backhaul_margin_db),
+            directional_trunk_gain_dbi=float(directional_gain_dbi),
+            site_profiles=site_profiles,
+        )
+    except (ValidationError, ValueError, TypeError, KeyError, OSError) as exc:
+        return {
+            "ok": False,
+            "error": {
+                "code": "FABRIC_PLAN_FAILED",
+                "message": str(exc),
+            },
+        }
+
+    if res.ok and res.value is not None:
+        return {"ok": True, "region": region, "plan": res.value.model_dump(mode="json")}
+    return {
+        "ok": False,
+        "error": (
+            res.error.model_dump(mode="json")
+            if res.error
+            else {"code": "FABRIC_PLAN_FAILED", "message": "Two-tier fabric planning failed"}
+        ),
+    }
+
+
+def evaluate_site_cosite_desense(
+    site_id: str,
+    access_freq_mhz: float = 915.0,
+    backhaul_freq_mhz: float = 906.875,
+    vertical_sep_m: float = 3.0,
+    filter_rejection_db: float = 0.0,
+    tx_power_dbm: float = 22.0,
+) -> Dict[str, Any]:
+    """Evaluate pairwise co-site broadband noise desense and RX compression risk for a resolved site."""
+    site = _resolve_site_by_id(site_id)
+    if site is None:
+        return {
+            "ok": False,
+            "error": {
+                "code": "SITE_NOT_FOUND",
+                "message": f"Site '{site_id}' was not found.",
+            },
+        }
+
+    try:
+        profile = MultiInterfaceSiteProfile(
+            site_id=site.site_id,
+            interfaces=[
+                RadioInterfaceSpec(
+                    interface_id="access_infill",
+                    tier=InterfaceTier.ACCESS_INFILL,
+                    radio=RadioConfig(
+                        frequency_mhz=float(access_freq_mhz),
+                        tx_power_dbm=float(tx_power_dbm),
+                    ),
+                    mast_mount_m=site.mast_height_m,
+                    filter_rejection_db=float(filter_rejection_db),
+                ),
+                RadioInterfaceSpec(
+                    interface_id="backhaul_bridge",
+                    tier=InterfaceTier.BACKHAUL_BRIDGE,
+                    radio=RadioConfig(
+                        frequency_mhz=float(backhaul_freq_mhz),
+                        tx_power_dbm=float(tx_power_dbm),
+                    ),
+                    mast_mount_m=site.mast_height_m + float(vertical_sep_m),
+                    filter_rejection_db=float(filter_rejection_db),
+                ),
+            ],
+        )
+        pairs = evaluate_cosite_desense(site, profile)
+    except (ValidationError, ValueError, TypeError) as exc:
+        return {
+            "ok": False,
+            "error": {
+                "code": "INVALID_COSITE_INPUT",
+                "message": str(exc),
+            },
+        }
+
+    return {
+        "ok": True,
+        "site_id": site.site_id,
+        "site_name": site.name,
+        "blocking_count": sum(1 for p in pairs if p.blocking_risk),
+        "pairs": [p.model_dump(mode="json") for p in pairs],
+    }
+
+
 __all__ = [
     "FCC_ASR_FIXTURE",
     "FIXTURES_DIR",
@@ -867,10 +1097,12 @@ __all__ = [
     "compute_channel_slot",
     "evaluate_backbone_resilience",
     "evaluate_link_budget",
+    "evaluate_site_cosite_desense",
     "export_cot_bundle",
     "import_sites_csv",
     "inspect_site_feasibility",
     "load_regional_fixtures",
+    "plan_tiered_rf_fabric",
     "resolve_regulatory_domain",
     "scout_repeater_sites",
     "snap_site_highpoint",

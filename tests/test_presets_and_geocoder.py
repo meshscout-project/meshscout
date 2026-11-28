@@ -93,6 +93,8 @@ def test_all_presets_load_and_build_valid_radio_config() -> None:
         "MESHCORE_STANDARD",
         "RETICULUM_RNODE_LONG",
         "RETICULUM_RNODE_FAST",
+        "GENERIC_LORA_WIDE_500",
+        "GENERIC_LORA_LONG_62K5",
     }
     expected_seasons = {"WINTER_LEAF_OFF", "SUMMER_LEAF_ON"}
 

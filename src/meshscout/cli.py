@@ -16,6 +16,7 @@ from typing import Any, Optional, Sequence, Tuple
 from meshscout.cli_tower_helpers import run_towers_subcommand
 from meshscout.core.contracts import Coordinate
 from meshscout.core.presets import CLIENT_ENVIRONMENT_PROFILES, build_radio_config
+from meshscout import commands
 from meshscout.core.registry import LivingMeshRegistry, evaluate_home_node_reach
 from meshscout.commands import (
     compute_channel_slot,
@@ -921,6 +922,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit structured JSON output.",
     )
 
+    # 14. fabric subcommand
+    p_fabric = subparsers.add_parser(
+        "fabric",
+        help="Plan a two-tier directional trunk and backhaul-viable valley infill RF fabric.",
+    )
+    p_fabric.add_argument(
+        "--region",
+        default="vt_chittenden",
+        help="Regional fixture pack identifier (default: vt_chittenden)",
+    )
+    p_fabric.add_argument(
+        "--target-coverage",
+        type=float,
+        default=0.85,
+        help="Target terrain coverage fraction in [0, 1] (default: 0.85)",
+    )
+    p_fabric.add_argument(
+        "--min-backhaul-margin-db",
+        type=float,
+        default=6.0,
+        help="Minimum required backhaul link margin in dB (default: 6.0)",
+    )
+    p_fabric.add_argument(
+        "--directional-gain-dbi",
+        type=float,
+        default=9.0,
+        help="Directional trunk antenna gain in dBi (default: 9.0)",
+    )
+    p_fabric.add_argument(
+        "--access-freq-mhz",
+        type=float,
+        default=915.0,
+        help="Access infill radio frequency in MHz (default: 915.0)",
+    )
+    p_fabric.add_argument(
+        "--backhaul-freq-mhz",
+        type=float,
+        default=906.875,
+        help="Backhaul bridge radio frequency in MHz (default: 906.875)",
+    )
+    p_fabric.add_argument(
+        "--vertical-sep-m",
+        type=float,
+        default=3.0,
+        help="Vertical antenna separation between access and backhaul radios in meters (default: 3.0)",
+    )
+    p_fabric.add_argument(
+        "--json",
+        action="store_true",
+        dest="output_json",
+        help="Emit structured JSON output.",
+    )
+
     return parser
 
 
@@ -1665,6 +1719,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"Channel: {res['channel_name']} | Region: {res['region_code']} | "
                 f"Frequency Slot: {res['frequency_slot']} (slot_index={res['slot_index']}) | "
                 f"Center Freq: {res['center_freq_mhz']} MHz\n"
+            )
+        return 0
+
+    if args.command == "fabric":
+        res = commands.plan_tiered_rf_fabric(
+            region=args.region,
+            target_coverage=args.target_coverage,
+            min_backhaul_margin_db=args.min_backhaul_margin_db,
+            directional_gain_dbi=args.directional_gain_dbi,
+            access_freq_mhz=args.access_freq_mhz,
+            backhaul_freq_mhz=args.backhaul_freq_mhz,
+            vertical_sep_m=args.vertical_sep_m,
+        )
+        if not res.get("ok"):
+            sys.stderr.write(
+                f"Error: {(res.get('error') or {}).get('message', 'Two-tier RF fabric planning failed')}\n"
+            )
+            return 1
+
+        if args.output_json:
+            sys.stdout.write(json.dumps(res, indent=2) + "\n")
+        else:
+            plan = res.get("plan") or {}
+            sys.stdout.write(
+                f"Region: {res.get('region', args.region)} | "
+                f"Coverage: {plan.get('achieved_weighted_coverage_fraction', 0.0)} | "
+                f"Trunk Sites: {len(plan.get('trunk_site_ids', []))} | "
+                f"Infill Sites: {len(plan.get('infill_site_ids', []))}\n"
             )
         return 0
 

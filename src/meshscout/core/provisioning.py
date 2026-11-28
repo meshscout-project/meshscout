@@ -11,7 +11,13 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from pydantic import BaseModel, Field
 
-from meshscout.core.contracts import SiteCandidate
+from meshscout.core.contracts import (
+    InterfaceTier,
+    MultiInterfaceSiteProfile,
+    RadiationClass,
+    RadioInterfaceSpec,
+    SiteCandidate,
+)
 from meshscout.core.presets import PROTOCOL_PROFILES, ProtocolProfile
 
 
@@ -38,6 +44,34 @@ class ProvisioningPayload(BaseModel):
     cli_commands: List[str] = Field(default_factory=list, description="Ready-to-paste CLI execution commands")
     meshcore_serial_commands: List[str] = Field(default_factory=list, description="MeshCore v1.14+ repeater serial console commands")
     inline_svg_qr: str = Field(..., description="Pure-Python generated inline SVG QR code")
+
+
+class InterfaceProvisioningItem(BaseModel):
+    """Per-interface provisioning configuration for a multi-interface site."""
+
+    interface_id: str
+    tier: str
+    protocol_family: str
+    frequency_mhz: float
+    bandwidth_khz: float
+    spreading_factor: int
+    tx_power_dbm: float
+    antenna_summary: str
+    bridge_group: Optional[str] = None
+    config_snippet: str
+    cli_commands: List[str] = Field(default_factory=list)
+
+
+class MultiInterfaceProvisioningBundle(BaseModel):
+    """Aggregated provisioning bundle across all interfaces of a multi-interface site."""
+
+    site_id: str
+    site_name: str
+    interface_count: int
+    bridge_groups: List[str] = Field(default_factory=list)
+    split_horizon_enabled: bool
+    items: List[InterfaceProvisioningItem] = Field(default_factory=list)
+    combined_config_text: str
 
 
 # ==============================================================================
@@ -756,3 +790,126 @@ def generate_site_provisioning(
         )
 
     raise ValueError(f"Unsupported provisioning target: {target}")
+
+
+def _normalize_protocol_family(protocol_family: Optional[str]) -> str:
+    """Normalize an optional protocol family label without raising."""
+    if not protocol_family:
+        return "GenericLoRa"
+    normalized = str(protocol_family).strip().lower()
+    mapping = {
+        "meshtastic": "Meshtastic",
+        "meshcore": "MeshCore",
+        "reticulum": "Reticulum",
+        "rns": "Reticulum",
+    }
+    return mapping.get(normalized, "GenericLoRa")
+
+
+def _format_antenna_summary(iface: RadioInterfaceSpec) -> str:
+    """Format a compact single-line antenna summary for a radio interface."""
+    pattern = iface.radio.antenna_pattern
+    if pattern is None or pattern.radiation_class == RadiationClass.OMNI:
+        return f"omni ({iface.radio.antenna_gain_dbi:.1f} dBi)"
+    return (
+        f"{pattern.radiation_class.value} @ {pattern.azimuth_deg:.1f} deg "
+        f"({pattern.h_beamwidth_deg:.0f} deg BW)"
+    )
+
+
+def generate_multi_interface_provisioning(
+    site: SiteCandidate,
+    profile: MultiInterfaceSiteProfile,
+    bandwidth_khz: float = 250.0,
+    spreading_factor: int = 11,
+) -> MultiInterfaceProvisioningBundle:
+    """Synthesize protocol-aware provisioning configs for all interfaces on a site."""
+    bridge_groups = sorted({iface.bridge_group for iface in profile.interfaces if iface.bridge_group})
+    split_horizon_enabled = bool(bridge_groups)
+    items: List[InterfaceProvisioningItem] = []
+
+    for idx, iface in enumerate(profile.interfaces):
+        protocol_family = _normalize_protocol_family(iface.protocol_family)
+        antenna_summary = _format_antenna_summary(iface)
+
+        if protocol_family == "Meshtastic":
+            role = "ROUTER" if iface.tier == InterfaceTier.BACKHAUL_BRIDGE else "ROUTER_LATE"
+            cli_commands = generate_meshtastic_cli_commands(
+                site=site,
+                role=role,
+                tx_power_dbm=iface.radio.tx_power_dbm,
+            )
+            cli_commands.append(
+                f"meshtastic --set lora.override_frequency {iface.radio.frequency_mhz:.3f}"
+            )
+            config_snippet = "\n".join(cli_commands)
+        elif protocol_family == "MeshCore":
+            serial_script = generate_meshcore_serial_script(
+                site=site,
+                freq_mhz=iface.radio.frequency_mhz,
+                bw_khz=bandwidth_khz,
+                sf=spreading_factor,
+                tx_power_dbm=int(round(iface.radio.tx_power_dbm)),
+            )
+            cli_commands = generate_meshcore_cli_commands(
+                site=site,
+                freq_mhz=iface.radio.frequency_mhz,
+                bw_khz=bandwidth_khz,
+                sf=spreading_factor,
+                tx_power_dbm=iface.radio.tx_power_dbm,
+            )
+            config_snippet = "\n".join(serial_script)
+        elif protocol_family == "Reticulum":
+            stanza = generate_reticulum_rnode_stanza(
+                site=site,
+                freq_mhz=iface.radio.frequency_mhz,
+                bw_khz=bandwidth_khz,
+                sf=spreading_factor,
+                tx_power_dbm=iface.radio.tx_power_dbm,
+                port=f"/dev/ttyUSB{idx}",
+            )
+            config_snippet = stanza.replace(
+                f"[[RNode-{site.site_id}]]",
+                f"[[RNode-{site.site_id}-{iface.interface_id}]]",
+                1,
+            )
+            cli_commands = ["rnsd --service"]
+        else:
+            cmd = (
+                f"lora-iface --id {iface.interface_id} --tier {iface.tier.value} "
+                f"--freq-mhz {iface.radio.frequency_mhz:.3f} --bw-khz {bandwidth_khz:.1f} "
+                f"--sf {spreading_factor} --tx-dbm {iface.radio.tx_power_dbm:.1f}"
+                + (f" --bridge-group {iface.bridge_group}" if iface.bridge_group else "")
+            )
+            config_snippet = cmd
+            cli_commands = [cmd]
+
+        items.append(
+            InterfaceProvisioningItem(
+                interface_id=iface.interface_id,
+                tier=iface.tier.value,
+                protocol_family=protocol_family,
+                frequency_mhz=iface.radio.frequency_mhz,
+                bandwidth_khz=bandwidth_khz,
+                spreading_factor=spreading_factor,
+                tx_power_dbm=iface.radio.tx_power_dbm,
+                antenna_summary=antenna_summary,
+                bridge_group=iface.bridge_group,
+                config_snippet=config_snippet,
+                cli_commands=cli_commands,
+            )
+        )
+
+    combined_config_text = "\n\n".join(item.config_snippet for item in items)
+    if split_horizon_enabled and any(item.protocol_family == "Reticulum" for item in items):
+        combined_config_text = f"[reticulum]\n  enable_transport = True\n\n{combined_config_text}"
+
+    return MultiInterfaceProvisioningBundle(
+        site_id=site.site_id,
+        site_name=site.name,
+        interface_count=len(items),
+        bridge_groups=bridge_groups,
+        split_horizon_enabled=split_horizon_enabled,
+        items=items,
+        combined_config_text=combined_config_text,
+    )
